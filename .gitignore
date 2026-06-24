@@ -1,0 +1,13 @@
+# Personal / sensitive — never publish
+_Profile_backup.ps1
+
+# Editor / script backups
+*.bak
+
+# Third-party binary (download separately, see README)
+nircmd.exe
+
+# Local assets not part of the tools
+emu_capture.png
+emu_small.jpg
+Modelfile.txt
