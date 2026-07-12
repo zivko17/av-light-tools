@@ -1,6 +1,6 @@
 function Get-Weather {
     param(
-        [string]$City = "Ibiza",
+        [string]$City = "Madrid",
         [ValidateSet("full","short","mini")]
         [string]$Format = "short"
     )

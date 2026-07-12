@@ -92,7 +92,7 @@ A few scripts default to the author's rig — **edit these before relying on the
 - **Static IP profiles** — `SetIP.ps1` ships with `192.168.0.99` / `192.168.1.99`
   profiles. Edit the `$profiles` table for your own subnets; pass `-Iface` to target
   a specific adapter.
-- **Weather location** — `Weather.ps1` defaults to Ibiza; change the default `-City`.
+- **Weather location** — `Weather.ps1` defaults to Madrid; change the default `-City`.
 - **NDI version** — `NDITools.ps1` auto-detects the newest `NDI N Tools` install,
   falling back to NDI 6.
 
