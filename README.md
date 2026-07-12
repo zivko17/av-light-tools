@@ -12,24 +12,31 @@ system diagnostics and Resolume automation, all behind one `tools` menu.
 ## Quick start
 
 ```powershell
-# 1. Clone into an EMPTY folder (git clone fails if the target already exists;
-#    pick any path you like — this example uses your home folder)
+# 1. Clone into an empty folder (any path; this example uses your home folder)
 git clone https://github.com/zivko17/av-light-tools.git $HOME\av-light-tools
 cd $HOME\av-light-tools
 
-# 2. Files cloned/copied on Windows may be blocked — unblock once
-Get-ChildItem . -Recurse | Unblock-File
+# 2. Run the installer — unblocks the files and adds a loader to your PowerShell profile
+.\install.ps1
 
-# 3. Dot-source the scripts from your $PROFILE (point this at wherever you cloned)
-Add-Content $PROFILE 'Get-ChildItem "$HOME\av-light-tools\*.ps1" | ForEach-Object { . $_.FullName }'
-
-# 4. Reload your profile, then open the menu
+# 3. Reload your profile (or open a new terminal), then open the menu
 . $PROFILE
 tools
 ```
 
-> Already have a `C:\Scripts`? Clone elsewhere (as above) — don't clone on top of
-> an existing folder. You can point the dot-source line at any location.
+> Windows PowerShell 5.1 and PowerShell 7 use separate profiles — run
+> `install.ps1` from each edition you want the tools in. Re-running it is safe.
+> Already have a `C:\Scripts`? Clone into a *different* empty folder; `git clone`
+> won't write into an existing directory.
+
+### Manual setup
+
+Prefer to wire it up by hand? Unblock the files and add a loader to your `$PROFILE`:
+
+```powershell
+Get-ChildItem . -Recurse | Unblock-File
+'foreach ($f in (Get-ChildItem "$HOME\av-light-tools\*.ps1" | Where-Object { $_.Name -ne "install.ps1" })) { . $f.FullName }' | Add-Content $PROFILE
+```
 
 ## The menu
 
