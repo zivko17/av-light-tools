@@ -52,6 +52,14 @@ function Show-Tools {
         @{ Title = "Audio Tools"; Items = @(
             @{ Name="audiotools"; Desc="FFmpeg audio menu (convert / normalize / trim / extract)" }
         )}
+        @{ Title = "EDID / Displays"; Items = @(
+            @{ Name="edid";       Desc="Interactive EDID menu (read / decode / compare / dump)" }
+            @{ Name="edid-list";  Desc="Summary of every display + what it reports" }
+            @{ Name="edid-info";  Desc="Full EDID decode  (edid-info 1 / edid-info file.bin)" }
+            @{ Name="edid-check"; Desc="Validate EDID: checksums, timings vs declared limits" }
+            @{ Name="edid-diff";  Desc="Compare two EDIDs  (edid-diff 1 proyector.bin)" }
+            @{ Name="edid-dump";  Desc="Save raw EDID to .bin  (for CRU / AW Editor / matrix)" }
+        )}
         @{ Title = "NDI"; Items = @(
             @{ Name="ndi";          Desc="Interactive NDI menu (diagnostics + launch apps)" }
             @{ Name="ndi-launch";   Desc="Open NDI Tools app  (ndi-launch monitor/router/test...)" }
@@ -124,6 +132,8 @@ function Show-Tools {
         Write-Host "  You can also still type any command name directly." -ForegroundColor DarkGray
         Write-Host ""
 
+        # Drain any stray/type-ahead keystrokes so a leftover Enter isn't read as an empty choice
+        if (-not [Console]::IsInputRedirected) { try { $Host.UI.RawUI.FlushInputBuffer() } catch {} }
         $choice = Read-Host "  Select"
         if ([string]::IsNullOrWhiteSpace($choice)) { break }
 

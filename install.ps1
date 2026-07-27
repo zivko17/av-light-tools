@@ -13,9 +13,17 @@
 [CmdletBinding()]
 param(
     # Folder holding the scripts. Defaults to where this installer lives.
-    [string]$ScriptDir = $PSScriptRoot
+    [string]$ScriptDir
 )
 
+# Resolve the scripts folder in the body: $PSScriptRoot is unreliable as a
+# parameter DEFAULT under Windows PowerShell 5.1, so compute it here with fallbacks.
+if (-not $ScriptDir) {
+    if     ($PSScriptRoot)                { $ScriptDir = $PSScriptRoot }
+    elseif ($PSCommandPath)               { $ScriptDir = Split-Path -Parent $PSCommandPath }
+    elseif ($MyInvocation.MyCommand.Path) { $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+    else                                  { $ScriptDir = (Get-Location).Path }
+}
 $ScriptDir = (Resolve-Path -LiteralPath $ScriptDir).Path
 
 Write-Host ""
@@ -35,7 +43,23 @@ Write-Host "  OK" -ForegroundColor Green
 #    functions land in the profile's scope. install.ps1 is skipped.
 $marker    = "# >>> AV Light Tools >>>"
 $endMarker = "# <<< AV Light Tools <<<"
-$loaderCmd = "foreach (`$__avlt in (Get-ChildItem `"$ScriptDir\*.ps1`" -ErrorAction SilentlyContinue | Where-Object { `$_.Name -ne 'install.ps1' })) { . `$__avlt.FullName }"
+# The loader dot-sources LIBRARY scripts only (files that just define functions).
+# COMMAND scripts - the ones with a top-level param() block, like SetIP.ps1,
+# Setup-NewPC.ps1 or the Ventoy helpers - must be RUN, not dot-sourced: sourcing
+# them executes their body at every startup (prompts, downloads, hangs). They are
+# skipped automatically, so dropping a new command script in the folder is safe.
+# Files starting with "_" (backups, disabled) are skipped too.
+$loaderLines = @(
+    "`$__avltDir = `"$ScriptDir`""
+    'foreach ($__avltF in (Get-ChildItem "$__avltDir\*.ps1" -ErrorAction SilentlyContinue)) {'
+    '    if ($__avltF.Name -like ''_*'') { continue }                                  # backup / disabled'
+    '    $__avltH = Get-Content -LiteralPath $__avltF.FullName -TotalCount 60 -ErrorAction SilentlyContinue'
+    '    if ($__avltH -match ''^param\s*\('') { continue }                             # command script: run it, do not source it'
+    '    . $__avltF.FullName'
+    '}'
+    'if (Test-Path "$__avltDir\SetIP.ps1") { Set-Alias -Name setip -Value "$__avltDir\SetIP.ps1" }'
+    'Remove-Variable __avltDir, __avltF, __avltH -ErrorAction SilentlyContinue'
+)
 
 if (-not (Test-Path -LiteralPath $PROFILE)) {
     New-Item -ItemType File -Path $PROFILE -Force | Out-Null
@@ -53,7 +77,7 @@ foreach ($line in $existing) {
     if (-not $skip) { $out.Add($line) }
 }
 $out.Add($marker)
-$out.Add($loaderCmd)
+foreach ($l in $loaderLines) { $out.Add($l) }
 $out.Add($endMarker)
 Set-Content -LiteralPath $PROFILE -Value $out -Encoding UTF8
 

@@ -12,6 +12,9 @@ function Get-SystemTelemetry {
         Write-Host ("[" + ("#" * $filled) + ("." * $empty) + "] $pct%") -ForegroundColor $color
     }
 
+    # Track previous NET counters so we can show a rate, not a since-boot total
+    $prevRx = $null; $prevTx = $null
+
     while ($true) {
         $hasConsole = -not [Console]::IsOutputRedirected
         $cursorTop = 0
@@ -19,7 +22,7 @@ function Get-SystemTelemetry {
             try { $cursorTop = [Console]::CursorTop } catch { $hasConsole = $false }
         }
 
-        # Portable English counter path; numeric/localized paths break on non-EN builds
+        # English counter path (also localized on non-EN Windows -> falls back to 0 there)
         $cpu = 0
         $cpuCounter = Get-Counter "\Processor(_Total)\% Processor Time" -ErrorAction SilentlyContinue
         if ($cpuCounter -and $cpuCounter.CounterSamples) {
@@ -44,10 +47,16 @@ function Get-SystemTelemetry {
         }
 
         $net = Get-NetAdapterStatistics -ErrorAction SilentlyContinue | Where-Object { $_.ReceivedBytes -gt 0 } | Select-Object -First 1
-        $rxMB = 0; $txMB = 0
+        $rxRate = 0; $txRate = 0
         if ($net) {
-            $rxMB = [math]::Round($net.ReceivedBytes / 1MB, 1)
-            $txMB = [math]::Round($net.SentBytes / 1MB, 1)
+            if ($null -ne $prevRx) {
+                $rxRate = [math]::Round(($net.ReceivedBytes - $prevRx) / 1MB, 2)
+                $txRate = [math]::Round(($net.SentBytes    - $prevTx) / 1MB, 2)
+                if ($rxRate -lt 0) { $rxRate = 0 }
+                if ($txRate -lt 0) { $txRate = 0 }
+            }
+            $prevRx = $net.ReceivedBytes
+            $prevTx = $net.SentBytes
         }
 
         $gpu = (Get-Counter "\GPU Engine(*engtype_3D)\Utilization Percentage" -ErrorAction SilentlyContinue).CounterSamples |
@@ -64,7 +73,7 @@ function Get-SystemTelemetry {
         Write-Host ("GPU  ") -NoNewline; Bar $gpuPct $colorGPU
         Write-Host ("DISK ") -NoNewline; Bar $diskPct $colorDSK
         Write-Host ("     $($diskTotal - $diskFree) GB / $diskTotal GB used") -ForegroundColor DarkGray
-        Write-Host ("NET  RX: $rxMB MB  |  TX: $txMB MB") -ForegroundColor Cyan
+        Write-Host ("NET  down: $rxRate MB/s  |  up: $txRate MB/s") -ForegroundColor Cyan
         Write-Host ("`nUpdated: $(Get-Date -Format 'HH:mm:ss')") -ForegroundColor DarkGray
         Start-Sleep -Seconds 1
         if ($hasConsole) {

@@ -379,6 +379,8 @@ function nettools {
         Write-Host ""
         Write-Host "    0)  Exit" -ForegroundColor DarkGray
         Write-Host ""
+        # Drain any stray/type-ahead keystrokes so a leftover Enter isn't read as an empty choice
+        if (-not [Console]::IsInputRedirected) { try { $Host.UI.RawUI.FlushInputBuffer() } catch {} }
         $op = Read-Host "  Choose option"
         switch ($op) {
             "1"  { & C:\Scripts\SetIP.ps1 0 }
@@ -394,7 +396,7 @@ function nettools {
             "6"  { myip }
             "7"  { scan }
             "8"  { $s = Read-Host "  Subnet (e.g. 192.168.10)"; if ($s) { scan $s } }
-            "9"  { $ip = Read-Host "  IP"; $pt = Read-Host "  Port"; if ($ip -and $pt) { portcheck $ip ([int]$pt) } }
+            "9"  { $ip = Read-Host "  IP"; $pt = Read-Host "  Port"; $pn = 0; if ($ip -and [int]::TryParse($pt, [ref]$pn)) { portcheck $ip $pn } elseif ($ip) { Write-Host "  Invalid port." -ForegroundColor Yellow } }
             "10" { $ip = Read-Host "  IP to scan"; if ($ip) { portscan $ip } }
             "11" { $ip = Read-Host "  IP"; if ($ip) { whoison $ip } }
             "12" { pingmulti }

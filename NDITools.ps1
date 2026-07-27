@@ -307,6 +307,8 @@ function Invoke-NDIMenu {
         Write-Host ""
         Write-Host "    0)  Exit" -ForegroundColor DarkGray
         Write-Host ""
+        # Drain any stray/type-ahead keystrokes so a leftover Enter isn't read as an empty choice
+        if (-not [Console]::IsInputRedirected) { try { $Host.UI.RawUI.FlushInputBuffer() } catch {} }
         $op = Read-Host "  Choose option"
         switch ($op) {
             "1"  { Test-NDINetwork }

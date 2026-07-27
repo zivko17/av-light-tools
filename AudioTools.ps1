@@ -407,6 +407,8 @@ function Invoke-AudioToolsMenu {
         Write-Host ""
         Write-Host "    0)  Exit" -ForegroundColor DarkGray
         Write-Host ""
+        # Drain any stray/type-ahead keystrokes so a leftover Enter isn't read as an empty choice
+        if (-not [Console]::IsInputRedirected) { try { $Host.UI.RawUI.FlushInputBuffer() } catch {} }
         $op = Read-Host "  Choose option"
         switch ($op) {
             "1"  { $p = Read-AudioFile; if ($p) { Invoke-AudioConvert -Path $p -Codec mp3_320 } }
@@ -431,7 +433,8 @@ function Invoke-AudioToolsMenu {
                 if ($p) {
                     $fmt = Read-Host "  Format (mp3/flac/wav/copy, default mp3)"
                     if (-not $fmt) { $fmt = "mp3" }
-                    Invoke-ExtractAudio -Path $p -Format $fmt
+                    if ($fmt -notin 'mp3','flac','wav','copy') { Write-Host "  Invalid format." -ForegroundColor Yellow }
+                    else { Invoke-ExtractAudio -Path $p -Format $fmt }
                 }
             }
             "11" {
@@ -439,7 +442,8 @@ function Invoke-AudioToolsMenu {
                 if ($p) {
                     $sr = Read-Host "  Sample rate (44100/48000/96000/192000, default 48000)"
                     if (-not $sr) { $sr = "48000" }
-                    Invoke-AudioResample -Path $p -SampleRate $sr
+                    if ($sr -notin '44100','48000','96000','192000') { Write-Host "  Invalid sample rate." -ForegroundColor Yellow }
+                    else { Invoke-AudioResample -Path $p -SampleRate $sr }
                 }
             }
             "12" {

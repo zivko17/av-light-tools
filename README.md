@@ -31,11 +31,36 @@ tools
 
 ### Manual setup
 
-Prefer to wire it up by hand? Unblock the files and add a loader to your `$PROFILE`:
+Prefer to wire it up by hand? Unblock the files, then add this block to your
+`$PROFILE` (edit the path). It dot-sources **library** scripts only: files whose
+name starts with `_` and *command* scripts — the ones with a top-level `param()`
+block, like `SetIP.ps1` or `Setup-NewPC.ps1` — are skipped, because sourcing
+those would execute them at every startup.
 
 ```powershell
-Get-ChildItem . -Recurse | Unblock-File
-'foreach ($f in (Get-ChildItem "$HOME\av-light-tools\*.ps1" | Where-Object { $_.Name -ne "install.ps1" })) { . $f.FullName }' | Add-Content $PROFILE
+Get-ChildItem . -Recurse | Unblock-File     # run once
+```
+
+```powershell
+$__avltDir = "$HOME\av-light-tools"
+foreach ($__avltF in (Get-ChildItem "$__avltDir\*.ps1" -ErrorAction SilentlyContinue)) {
+    if ($__avltF.Name -like '_*') { continue }
+    $__avltH = Get-Content -LiteralPath $__avltF.FullName -TotalCount 60 -ErrorAction SilentlyContinue
+    if ($__avltH -match '^param\s*\(') { continue }
+    . $__avltF.FullName
+}
+if (Test-Path "$__avltDir\SetIP.ps1") { Set-Alias -Name setip -Value "$__avltDir\SetIP.ps1" }
+```
+
+### New machine
+
+`Setup-NewPC.ps1` does the whole bootstrap in one go — copies the tools to
+`C:\Scripts`, unblocks them, configures **both** PowerShell profiles and reports
+which external binaries are missing:
+
+```powershell
+.\Setup-NewPC.ps1                 # copy + both profiles + dependency check
+.\Setup-NewPC.ps1 -InstallDeps    # also winget-install what's missing
 ```
 
 ## The menu
@@ -54,18 +79,102 @@ numbering and dispatch update automatically when you add a tool.
 ### NDI — `NDITools.ps1`
 `ndi` menu, `ndi-launch`, `ndi-check`, `ndi-services`, `ndi-config` (NDI 6 Tools).
 
+### EDID — `EDIDTools.ps1`
+`edid` menu, plus `edid-list`, `edid-info`, `edid-check`, `edid-diff`, `edid-dump`.
+Reads the raw EDID of every display (registry, falling back to WMI) and decodes
+the base block and the CTA-861 extension: native timing, range limits, VICs,
+audio SADs, HDMI / HDMI Forum vendor blocks, HDR static metadata and colorimetry.
+
+```powershell
+edid-list                       # what every connected display reports
+edid-info 1                     # full decode of display 1
+edid-check                      # checksums + timings vs declared limits
+edid-dump 1                     # save the raw .bin
+edid-diff 1 projector.bin       # direct vs through the switcher/extender
+```
+
+`edid-diff` is the one that earns its keep on site: dump the projector plugged
+in directly, dump it again through the switcher or extender, and the diff shows
+exactly which VICs, audio blocks or TMDS limits went missing on the way.
+
+**Read-only by design** — it never writes an EDID override or touches the
+display driver. To *force* an EDID use [CRU](https://www.monitortests.com/forum/Thread-Custom-Resolution-Utility-CRU)
+(ToastyX), [AW EDID Editor](https://www.analogway.com) or a hardware EDID emulator;
+this tool tells you what is actually being reported so you know what to force.
+
 ### Audio — `AudioTools.ps1`
 FFmpeg audio toolkit: convert presets (mp3 / aac / opus / flac / wav),
 `normalize` (two-pass EBU R128 −23 LUFS), `trim`, `extract-audio`, `resample`,
 mono/stereo, `probe-audio`, and the `audiotools` menu.
 
+### AV / IT calculators — `AVCalc.ps1`
+Offline design maths, `calc` for the menu or the commands directly:
+`calc-ledwall` (real resolution, power, NovaStar cabling, weight),
+`calc-screen`, `calc-projector` (throw + lumens), `calc-pixelpitch`,
+`calc-bitrate`, `calc-avoip`, `calc-camera` (FOV + DORI), `calc-brightness`,
+`calc-viewangle`, `calc-audiobw`, `calc-speaker`, `calc-cable`, `calc-dsp`,
+`calc-subnet`.
+
+> Where a figure comes from a standard's *guideline* (AVIXA viewing ratios,
+> ambient-light contrast) or is a codec **estimate** (NDI / AVoIP), the output
+> says so. Throw, pitch, DORI, subnet and wall geometry are exact maths.
+
 ### System & utilities
 `sysinfo`, `tele`, `top`, `killp`, `usb`, `disks`, `monitors`,
 `monitors-arrange`, `battery`, `startup`, `audio`, `services-audio`, `myip`,
-`cleanup`, `backup`, `search`, `weather`, `timer`.
+`cleanup`, `backup`, `search`, `weather`, `timer`, `cuedeck`.
 
 ### Resolume / hotkeys
 `.ahk` and `.bat` helpers for Resolume Arena and common shortcuts.
+
+## GUI companions (C#, .NET 8)
+
+Two small WinForms apps that cover the same ground with a mouse, for when a
+console isn't practical. Source only — build them with `dotnet build`:
+
+| Project | What it is |
+|---------|------------|
+| `AVToolbox/` | Audio / NDI / network / calculator front-end over the same workflows |
+| `NetMaint/`  | Network maintenance: adapter info, IP config, ping, port scan, subnet sweep, speedtest, traffic graph |
+
+## Portable mode (USB stick)
+
+The toolkit also runs with **nothing installed on the host PC** — useful when
+you are on someone else's rig and don't want to touch their profile.
+
+```powershell
+# Copy the whole folder to the stick, then on the target PC:
+E:\av-light-tools\Portable\AV-Tools.cmd     # everything, opens the tools menu
+E:\av-light-tools\Portable\EDID.cmd         # straight into the EDID menu
+```
+
+Both `.cmd` files are double-clickable. They prefer PowerShell 7 and fall back
+to Windows PowerShell 5.1, which is on every Windows machine. From an already
+open prompt, **dot-source** the launcher (the leading dot matters — without it
+the commands vanish when the script returns):
+
+```powershell
+. E:\av-light-tools\Portable\Start-Portable.ps1
+```
+
+What portable mode does:
+
+- Loads every tool into that one session only. **`$PROFILE` is never touched**,
+  nothing is written to the registry, nothing is installed.
+- Sends output that would normally go to the host's Documents / Music / Videos
+  folders to `<stick>\_OUTPUT` instead, so EDID dumps stay with you.
+- Tells you up front which optional binaries (FFmpeg, yt-dlp, Speedtest) are
+  missing on that PC.
+- Loads library scripts by dot-sourcing them, and exposes scripts that have a
+  top-level `param()` block (`setip`, `setup-newpc`, …) as aliases instead — the
+  distinction is read from the script's AST, so dropping extra `.ps1` files into
+  the folder can't make the loader run them by accident.
+
+Close the window and nothing is left behind.
+
+> If a machine enforces an execution policy through Group Policy, the
+> `-ExecutionPolicy Bypass` in the launcher is ignored and the scripts won't
+> run — that's a locked-down PC, not a bug.
 
 ## External tools (optional)
 

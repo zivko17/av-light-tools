@@ -1,5 +1,5 @@
 function Get-BatteryStatus {
-    $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue
+    $battery = Get-CimInstance -ClassName Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
 
     if (-not $battery) {
         Write-Host "`n  No battery detected (desktop PC?).`n" -ForegroundColor Yellow

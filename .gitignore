@@ -4,6 +4,9 @@ _Profile_backup.ps1
 # Editor / script backups
 *.bak
 
+# Portable-run output (EDID dumps, captures) - stays on the stick
+_OUTPUT/
+
 # Third-party binary (download separately, see README)
 nircmd.exe
 
@@ -11,3 +14,14 @@ nircmd.exe
 emu_capture.png
 emu_small.jpg
 Modelfile.txt
+
+# Personal tool - depends on the author's own YouTube Music session
+YTMusic.ps1
+
+# .NET build output (the C# companions)
+bin/
+obj/
+publish/
+
+# Generated knowledge-graph output
+graphify-out/
