@@ -119,6 +119,38 @@ Offline design maths, `calc` for the menu or the commands directly:
 > ambient-light contrast) or is a codec **estimate** (NDI / AVoIP), the output
 > says so. Throw, pitch, DORI, subnet and wall geometry are exact maths.
 
+### Reverse engineering — `REATools.ps1`
+`reatools` menu, plus `rea-doctor` and `rea-run`. A thin front-end over the
+[REA](https://github.com/morluto/rea) CLI (`npm install --global rea-agents`)
+for inspecting software you only have as a shipped artifact: native binaries,
+Android APKs, JavaScript / Electron apps, .NET assemblies, SQLite snapshots.
+
+```powershell
+reatools                               # the menu
+rea-doctor                             # which engines are configured and healthy
+rea analyze app.exe                    # overview of an app or binary
+rea decompile app.exe entry            # pseudocode of one procedure (Ghidra)
+rea inspect-android-package app.apk    # package, SDK, permissions, manifest (JADX)
+```
+
+Deep-analysis engines are optional and caller-supplied — REA never downloads
+them. They are picked up from the environment:
+
+| Variable | Engine | What it unlocks |
+|----------|--------|-----------------|
+| `JAVA_HOME` | full JDK 21+ (64-bit) | required by both Ghidra and JADX |
+| `GHIDRA_INSTALL_DIR` | [Ghidra](https://github.com/NationalSecurityAgency/ghidra) 12.1.x | native PE / ELF / Mach-O decompilation |
+| `REA_JADX_MCP_JAR` | `jadx-headless-mcp` 0.7.1 JAR | Android APK classes and methods |
+
+The menu footer shows which of the three are live, and `rea-doctor` explains
+what is missing. Static JavaScript / Electron, .NET and SQLite inspection needs
+none of them.
+
+**Read-only on the target** — REA never executes the artifact it analyzes, and
+the imported analysis database is ephemeral. Every result carries an Evidence
+record with the artifact's SHA-256, the engine identity and the limitations of
+that specific observation.
+
 ### System & utilities
 `sysinfo`, `tele`, `top`, `killp`, `usb`, `disks`, `monitors`,
 `monitors-arrange`, `battery`, `startup`, `audio`, `services-audio`, `myip`,
@@ -186,6 +218,8 @@ Each is resolved automatically if installed; an install hint is shown if missing
 | yt-dlp | `winget install yt-dlp.yt-dlp` |
 | Ookla Speedtest | `winget install Ookla.Speedtest.CLI` |
 | nircmd (display config) | <https://www.nirsoft.net/utils/nircmd.html> |
+| Node.js 22+ (for REA) | `winget install OpenJS.NodeJS.LTS` |
+| REA CLI | `npm install --global rea-agents` |
 
 > The **AVTools** FFmpeg video module (`av` / `convert` / `probe` / `dl` —
 > HAP / ProRes / NVENC) is a separate PowerShell 7 module and is not part of
