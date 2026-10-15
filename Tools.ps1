@@ -67,6 +67,15 @@ function Show-Tools {
             @{ Name="ndi-services"; Desc="NDI services and running NDI processes" }
             @{ Name="ndi-config";   Desc="Read NDI Access Manager configuration" }
         )}
+        @{ Title = "Reverse Engineering (REA)"; Items = @(
+            @{ Name="reatools";   Desc="Interactive REA menu (binaries / APK / JS / .NET)" }
+            @{ Name="rea-doctor"; Desc="Check engines: Ghidra / JADX / JDK" }
+            @{ Name="rea";        Desc="REA CLI directly  (rea <command> ...)" }
+            @{ Info="rea analyze <file>                   Overview of an app or binary" }
+            @{ Info="rea decompile <file> <proc>          Pseudocode of one procedure (Ghidra)" }
+            @{ Info="rea inspect-android-package <apk>    APK manifest + SDK + permissions (JADX)" }
+            @{ Info="rea --help                           Full command list (200+ commands)" }
+        )}
         @{ Title = "Maintenance"; Items = @(
             @{ Name="cleanup"; Desc="Clean temp files, caches and recycle bin" }
             @{ Name="backup";  Desc='Quick backup with date  (backup "src" "dest")' }
