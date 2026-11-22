@@ -41,16 +41,9 @@ const GROUPS: [(&str, &[&str]); 7] = [
     (
         "net",
         &[
-            "info",
-            "myip",
-            "scan",
-            "portcheck",
-            "portscan",
-            "whoison",
             "pingmulti",
             "latency",
             "speed",
-            "connections",
             "speedtest",
             "flushdns",
             "reset-nic",
