@@ -33,6 +33,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --release -p avlt
+      - name: Release executable exists and runs
+        shell: bash
+        run: |
+          test -f target/release/avlt.exe
+          target/release/avlt.exe --version
       - name: Smoke test (net)
         shell: bash
         run: |
