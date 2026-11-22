@@ -4,6 +4,7 @@
 pub use avlt_core::{Error, Result};
 
 pub mod admin;
+mod com;
 pub mod console;
 pub mod edid_source;
 pub mod media;

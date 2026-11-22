@@ -8,6 +8,7 @@ use crate::{Error, Result};
 /// Connects to a WMI namespace such as `ROOT\CIMV2` or `root\wmi`.
 #[cfg(windows)]
 pub(crate) fn connect(namespace: &str) -> Result<::wmi::WMIConnection> {
+    crate::com::pin_mta();
     ::wmi::WMIConnection::with_namespace_path(namespace)
         .map_err(|e| Error::Other(format!("WMI {namespace}: {e}")))
 }
@@ -67,6 +68,43 @@ mod tests {
         assert_eq!(cim_datetime("2023101512"), None);
         assert_eq!(cim_datetime("abcd1015123045.000000+060"), None);
         assert_eq!(cim_datetime("20230000000000.000000+000"), None);
+    }
+
+    /// Regression: another thread (Core Audio's `ComGuard`) enters the MTA before this
+    /// thread connects and leaves it while the connection is alive. Without the process
+    /// pinning the MTA, that tears the apartment down under the live WMI proxies, which
+    /// crashed the test binary (stack overflow / access violation) or hung it.
+    #[cfg(windows)]
+    #[test]
+    fn survives_another_thread_leaving_the_mta() {
+        use std::sync::mpsc::channel;
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Os {
+            caption: Option<String>,
+        }
+        for _ in 0..20 {
+            let (entered_tx, entered_rx) = channel();
+            let (leave_tx, leave_rx) = channel::<()>();
+            let other = std::thread::spawn(move || {
+                // SAFETY: plain init, paired with CoUninitialize below when it succeeded.
+                let ok = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+                entered_tx.send(()).unwrap();
+                leave_rx.recv().unwrap();
+                if ok {
+                    // SAFETY: pairs the successful CoInitializeEx above.
+                    unsafe { CoUninitialize() };
+                }
+            });
+            entered_rx.recv().unwrap();
+            let con = connect("ROOT\\CIMV2").unwrap();
+            leave_tx.send(()).unwrap();
+            other.join().unwrap();
+            let rows: Vec<Os> = query(&con, "SELECT Caption FROM Win32_OperatingSystem").unwrap();
+            assert!(rows[0].caption.is_some());
+        }
     }
 
     #[cfg(windows)]
