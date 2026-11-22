@@ -10,12 +10,12 @@ avlt-core.workspace = true
 serde.workspace = true
 tokio.workspace = true
 sysinfo.workspace = true
-ureq.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 wmi.workspace = true
 winreg.workspace = true
+ureq.workspace = true
 
 [lints]
 workspace = true

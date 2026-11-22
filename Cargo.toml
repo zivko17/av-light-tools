@@ -22,7 +22,8 @@ windows = { version = "0.62.2", features = ["Win32_Foundation"] }
 wmi = "0.18.4"
 winreg = "0.56.0"
 sysinfo = "0.40.4"
-ureq = "3.5.2"
+# native-tls = SChannel on Windows: system certificate store, no C toolchain needed.
+ureq = { version = "3.5.2", default-features = false, features = ["native-tls"] }
 tempfile = "3.27.0"
 
 [profile.release]
