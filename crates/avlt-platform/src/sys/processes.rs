@@ -53,8 +53,8 @@ mod imp {
     use std::time::Instant;
 
     use avlt_core::sys::model::{ProcessInfo, TopSample};
-    use avlt_core::sys::process::process_base_name;
-    use avlt_core::sys::{cpu_percent, is_critical_process, matches_process};
+    use avlt_core::sys::process::{is_protected_process, process_base_name};
+    use avlt_core::sys::{cpu_percent, matches_process};
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
@@ -77,7 +77,7 @@ mod imp {
     fn info(p: &sysinfo::Process, cpu_pct: f64) -> ProcessInfo {
         let name = process_base_name(&p.name().to_string_lossy()).to_string();
         ProcessInfo {
-            critical: is_critical_process(&name),
+            critical: is_protected_process(p.pid().as_u32(), &name),
             name,
             pid: p.pid().as_u32(),
             memory_bytes: p.memory(),
@@ -230,30 +230,40 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn finds_and_kills_a_process_we_spawned() {
+        /// Kills the child on drop, so a failing assertion leaves nothing running.
+        struct Guard(std::process::Child);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
         // A private copy of a harmless program, so no other process shares its name.
-        let dir = std::env::temp_dir().join(format!("avlt-killp-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let exe = dir.join("avltkilltest.exe");
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("avltkilltest.exe");
         let system = std::env::var("SystemRoot").unwrap();
         std::fs::copy(format!(r"{system}\System32\ping.exe"), &exe).unwrap();
-        let mut child = std::process::Command::new(&exe)
-            .args(["-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut child = Guard(
+            std::process::Command::new(&exe)
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id();
 
         let found = find_processes("AVLTKILLTEST", false).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].pid, child.id());
+        assert_eq!(found[0].pid, pid);
         assert_eq!(found[0].name, "avltkilltest");
         assert!(!found[0].critical);
         assert!(find_processes("avltkill", false).unwrap().is_empty());
         assert_eq!(find_processes("avltkill", true).unwrap().len(), 1);
 
-        kill(child.id()).unwrap();
-        let status = child.wait().unwrap();
+        kill(pid).unwrap();
+        let status = child.0.wait().unwrap();
         assert!(!status.success());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]

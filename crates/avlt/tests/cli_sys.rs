@@ -182,23 +182,77 @@ mod windows {
         assert!(stdout(&o).contains("PROCESS"), "{}", stdout(&o));
     }
 
-    /// Spawns a private copy of ping.exe under a unique name; the only process killed.
-    fn spawn_victim(name: &str) -> (std::process::Child, tempfile::TempDir) {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join(format!("{name}.exe"));
-        let system = std::env::var("SystemRoot").unwrap();
-        std::fs::copy(format!(r"{system}\System32\ping.exe"), &exe).unwrap();
-        let child = Command::new(&exe)
-            .args(["-n", "60", "127.0.0.1"])
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
-        (child, dir)
+    /// A private copy of ping.exe running under a chosen name; killed on drop so a failed
+    /// assertion leaves nothing behind. The only processes these tests may kill.
+    struct Victim {
+        child: std::process::Child,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Victim {
+        fn spawn(name: &str) -> Victim {
+            let dir = tempfile::tempdir().unwrap();
+            let exe = dir.path().join(format!("{name}.exe"));
+            let system = std::env::var("SystemRoot").unwrap();
+            std::fs::copy(format!(r"{system}\System32\ping.exe"), &exe).unwrap();
+            let child = Command::new(&exe)
+                .args(["-n", "60", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            Victim { child, _dir: dir }
+        }
+
+        fn alive(&mut self) -> bool {
+            self.child.try_wait().unwrap().is_none()
+        }
+    }
+
+    impl Drop for Victim {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    /// A fake process named `System` (critical list) — the real System process cannot
+    /// be terminated by anyone, so even a regression could only hit the fake.
+    #[test]
+    fn killp_never_kills_critical_processes_with_yes() {
+        let mut fake = Victim::spawn("System");
+        let pid = fake.child.id();
+
+        let o = avlt(&["sys", "killp", "System", "--yes", "--json"]);
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        let v = json(&o);
+        let ours = v["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["pid"] == pid)
+            .unwrap_or_else(|| panic!("fake not reported: {v}"));
+        assert_eq!(ours["killed"], false, "{v}");
+        assert_eq!(ours["skipped"], true, "{v}");
+        assert!(fake.alive(), "critical process killed with --yes");
+        assert!(stderr(&o).contains("--include-critical"), "{}", stderr(&o));
+
+        // (No --wildcard --yes here: a partial pattern would also match real processes;
+        // the wildcard split is covered by avlt_core::sys::process::kill_plan tests.)
+
+        // --include-critical needs a terminal y/N answer; --yes never satisfies it.
+        let o = avlt(&["sys", "killp", "System", "--include-critical", "--yes"]);
+        assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+        assert!(stderr(&o).contains("terminal"), "{}", stderr(&o));
+        assert!(
+            fake.alive(),
+            "critical process killed without a terminal answer"
+        );
     }
 
     #[test]
     fn killp_refuses_without_yes_then_kills_with_yes() {
-        let (mut child, _dir) = spawn_victim("avltclivictim");
+        let mut victim = Victim::spawn("avltclivictim");
+        let child = &mut victim.child;
 
         let o = avlt(&["sys", "killp", "avltclivictim"]);
         assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
@@ -221,16 +275,15 @@ mod windows {
     }
 
     #[test]
-    fn killp_flags_critical_processes_but_refuses_without_yes() {
+    fn killp_lists_critical_processes_as_skipped() {
+        // No --yes: even a regression would stop at the confirmation (no terminal).
         let o = avlt(&["sys", "killp", "explorer"]);
-        // explorer may not run on a CI runner: no match is exit 0, a match is refused.
-        match o.status.code() {
-            Some(0) => assert!(stderr(&o).contains("No process found")),
-            Some(2) => {
-                assert!(stdout(&o).contains("<- CRITICAL"), "{}", stdout(&o));
-                assert!(stderr(&o).contains("critical system processes"));
-            }
-            c => panic!("unexpected exit {c:?}: {}", stderr(&o)),
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        // explorer may not run on a CI runner.
+        if !stderr(&o).contains("No process found") {
+            assert!(stdout(&o).contains("<- CRITICAL"), "{}", stdout(&o));
+            assert!(stdout(&o).contains("Skipped"), "{}", stdout(&o));
+            assert!(stderr(&o).contains("--include-critical"), "{}", stderr(&o));
         }
     }
 

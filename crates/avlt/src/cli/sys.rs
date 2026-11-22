@@ -14,6 +14,7 @@ use avlt_core::sys::model::{
     AudioDevice, CleanStatus, Display, DisplayMode, KillReport, KillResult, ProcessInfo, Telemetry,
     TopSample, Volume,
 };
+use avlt_core::sys::process::{is_protected_process, kill_plan};
 use avlt_core::sys::{AUDIO_RESTART_SERVICE, AUDIO_SERVICES};
 use avlt_core::{Error, Result};
 use avlt_platform::sys as psys;
@@ -81,7 +82,11 @@ pub struct KillpArgs {
     /// Match every process whose name contains NAME
     #[arg(short, long)]
     pub wildcard: bool,
-    /// Do not ask for confirmation
+    /// Also kill critical system processes (svchost, csrss, explorer...). Always asks
+    /// interactively; --yes does not answer that question
+    #[arg(long)]
+    pub include_critical: bool,
+    /// Do not ask for confirmation (never covers critical processes)
     #[arg(short = 'y', long)]
     pub yes: bool,
 }
@@ -522,24 +527,68 @@ fn killp(args: KillpArgs, out: &Out) -> Result<()> {
             );
         }
     }
-    if report.matched.iter().any(|p| p.critical) {
+    let (to_kill, skipped) = kill_plan(&report.matched, args.include_critical);
+    let critical: Vec<&ProcessInfo> = to_kill
+        .iter()
+        .copied()
+        .filter(|p| p.critical || is_protected_process(p.pid, &p.name))
+        .collect();
+    if !critical.is_empty() {
+        // Never answered by --yes, never without a terminal.
         out.warn("this matches critical system processes. Killing them can crash Windows.");
+        if !io::stdin().is_terminal() {
+            return Err(Error::InvalidInput(
+                "--include-critical needs an interactive answer in a terminal (--yes does not count)"
+                    .into(),
+            ));
+        }
+        confirm(
+            false,
+            &format!("Really kill {} CRITICAL system processes?", critical.len()),
+        )?;
     }
-    confirm(
-        args.yes,
-        &format!("Kill all {} processes?", report.matched.len()),
-    )?;
-    for p in &report.matched {
+    if !skipped.is_empty() {
+        out.warn(&format!(
+            "{} critical system processes are skipped (add --include-critical to kill them).",
+            skipped.len()
+        ));
+    }
+    let normal = to_kill.len() - critical.len();
+    if normal > 0 {
+        confirm(args.yes, &format!("Kill {normal} processes?"))?;
+    }
+    for p in &skipped {
+        report.results.push(KillResult {
+            name: p.name.clone(),
+            pid: p.pid,
+            killed: false,
+            skipped: true,
+            error: None,
+        });
+    }
+    for p in &to_kill {
         let result = psys::kill(p.pid);
         report.results.push(KillResult {
             name: p.name.clone(),
             pid: p.pid,
             killed: result.is_ok(),
+            skipped: false,
             error: result.err().map(|e| e.to_string()),
         });
     }
     out.emit(&report, |r, out| {
         for k in &r.results {
+            if k.skipped {
+                line(
+                    out,
+                    &paint(
+                        out,
+                        Colour::Yellow,
+                        &format!("  Skipped (critical): {} (PID {})", k.name, k.pid),
+                    ),
+                );
+                continue;
+            }
             match &k.error {
                 None => out.ok(&format!("  Killed: {} (PID {})", k.name, k.pid)),
                 Some(e) => line(
@@ -553,11 +602,15 @@ fn killp(args: KillpArgs, out: &Out) -> Result<()> {
             }
         }
     });
-    let failed = report.results.iter().filter(|k| !k.killed).count();
+    let attempted = report.results.iter().filter(|k| !k.skipped).count();
+    let failed = report
+        .results
+        .iter()
+        .filter(|k| !k.skipped && !k.killed)
+        .count();
     if failed > 0 {
         return Err(Error::Other(format!(
-            "{failed} of {} processes could not be killed",
-            report.results.len()
+            "{failed} of {attempted} processes could not be killed"
         )));
     }
     Ok(())
@@ -688,7 +741,7 @@ fn monitors(out: &Out) -> Result<()> {
             );
         }
         blank(out);
-        out.title("=== REFRESH RATE (best listed mode) ===");
+        out.title("=== REFRESH RATE (highest listed mode) ===");
         for m in r.physical.iter().filter_map(|m| m.best_mode) {
             line(
                 out,
@@ -1161,6 +1214,15 @@ fn cleanup(args: CleanupArgs, out: &Out) -> Result<()> {
                 CleanStatus::AlreadyClean => {
                     paint(out, Colour::Dim, &format!("  {:<25} already clean", i.name))
                 }
+                CleanStatus::Unsafe => paint(
+                    out,
+                    Colour::Red,
+                    &format!(
+                        "  {:<25} skipped ({})",
+                        i.name,
+                        i.skipped_reason.as_deref().unwrap_or("unsafe target")
+                    ),
+                ),
             };
             line(out, &row);
         }

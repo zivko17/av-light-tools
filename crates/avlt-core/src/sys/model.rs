@@ -142,6 +142,8 @@ pub struct KillResult {
     pub name: String,
     pub pid: u32,
     pub killed: bool,
+    /// Critical process left alone (no `--include-critical`).
+    pub skipped: bool,
     pub error: Option<String>,
 }
 
@@ -209,7 +211,8 @@ pub struct PhysicalMonitor {
     pub manufacturer: String,
     pub model: String,
     pub serial: String,
-    /// The listed source mode with the highest refresh rate (Monitors.ps1 "REFRESH RATE").
+    /// The listed source mode with the highest refresh rate, larger resolution on a tie
+    /// (Monitors.ps1 "REFRESH RATE").
     pub best_mode: Option<DisplayMode>,
 }
 
@@ -338,6 +341,8 @@ pub enum CleanStatus {
     Locked,
     /// Nothing to delete.
     AlreadyClean,
+    /// Not touched: the path failed the safety check (root, profile, Windows folder...).
+    Unsafe,
 }
 
 impl CleanStats {
@@ -360,6 +365,8 @@ pub struct CleanupItem {
     pub path: PathBuf,
     pub status: CleanStatus,
     pub stats: CleanStats,
+    /// Why an [`CleanStatus::Unsafe`] target was skipped.
+    pub skipped_reason: Option<String>,
 }
 
 /// Size of one cleanup target before cleaning (`sys cleanup --analyze`).
