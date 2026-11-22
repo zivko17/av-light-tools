@@ -7,16 +7,15 @@ use std::time::{Duration, Instant};
 use avlt_core::net::COMMON_PORTS;
 use avlt_core::net::format::{
     LatencyStats, LinkClass, format_bps, format_bytes, format_elapsed, format_link_speed,
-    latency_bars, latency_class, link_class, traffic_rate,
+    latency_bars, latency_class, link_class, parse_speedtest,
 };
 use avlt_core::net::model::{
-    Adapter, IpChange, LatencySample, MyIp, PingHost, PingRound, PortCheck, PortScan, SpeedSample,
-    VendorSource,
+    Adapter, IpChange, LatencySample, MyIp, PingRound, PortCheck, PortScan, VendorSource,
 };
-use avlt_core::net::target::{IpTarget, parse_ip_target, parse_scan_target};
+use avlt_core::net::target::{IpTarget, parse_ip_target, parse_scan_target, split_hosts};
 use avlt_core::{Error, Result};
 use avlt_platform::admin::require_admin;
-use avlt_platform::net::{self as pnet, PING_TIMEOUT};
+use avlt_platform::net::{self as pnet, TrafficMeter};
 use avlt_platform::process::{self, find_tool};
 use clap::{Args, Subcommand};
 
@@ -523,33 +522,12 @@ fn endpoint(addr: std::net::IpAddr, port: u16) -> String {
 
 // ---------------------------------------------------------------- live monitors
 
-/// Splits `a,b c` style host lists, dropping blanks and duplicates (order kept).
-fn split_hosts(args: &[String]) -> Vec<String> {
-    let mut hosts: Vec<String> = Vec::new();
-    for h in args.iter().flat_map(|a| a.split(',')).map(str::trim) {
-        if !h.is_empty() && !hosts.iter().any(|x| x == h) {
-            hosts.push(h.to_string());
-        }
-    }
-    hosts
-}
-
-fn millis(d: Duration) -> u64 {
-    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-}
-
 /// NetTools.ps1 `pingmulti` (lines 208-240) / NetMaint PingPage, refreshed every second.
 fn pingmulti(args: PingmultiArgs, out: &Out) -> Result<()> {
     if !cfg!(windows) {
         return Err(Error::Unsupported);
     }
-    let targets: Vec<(String, Option<Ipv4Addr>)> = split_hosts(&args.hosts)
-        .into_iter()
-        .map(|h| {
-            let ip = pnet::resolve_ipv4(&h).ok();
-            (h, ip)
-        })
-        .collect();
+    let targets: Vec<(String, Option<Ipv4Addr>)> = pnet::ping_targets(&split_hosts(&args.hosts));
     for (h, ip) in &targets {
         if ip.is_none() {
             out.warn(&format!("cannot resolve '{h}'"));
@@ -566,42 +544,7 @@ fn pingmulti(args: PingmultiArgs, out: &Out) -> Result<()> {
         let mut failures = vec![0u64; targets.len()];
         let mut ticker = Ticker::new(args.count.count, true);
         while ticker.next().await {
-            let mut set = tokio::task::JoinSet::new();
-            for (i, (_, ip)) in targets.iter().enumerate() {
-                let ip = *ip;
-                set.spawn(async move {
-                    let rtt = match ip {
-                        Some(ip) => pnet::ping(ip, PING_TIMEOUT).await,
-                        None => None,
-                    };
-                    (i, rtt)
-                });
-            }
-            let mut rtts = vec![None; targets.len()];
-            while let Some(Ok((i, rtt))) = set.join_next().await {
-                rtts[i] = rtt;
-            }
-            let hosts = targets
-                .iter()
-                .zip(rtts)
-                .zip(failures.iter_mut())
-                .map(|(((host, ip), rtt), fails)| {
-                    if rtt.is_none() {
-                        *fails += 1;
-                    }
-                    PingHost {
-                        host: host.clone(),
-                        ip: *ip,
-                        online: rtt.is_some(),
-                        latency_ms: rtt.map(millis),
-                        failures: *fails,
-                    }
-                })
-                .collect();
-            let round = PingRound {
-                elapsed_s: start.elapsed().as_secs_f64(),
-                hosts,
-            };
+            let round = pnet::ping_round(&targets, &mut failures, start).await;
             if out.json {
                 json_line(&round);
             } else {
@@ -677,7 +620,7 @@ fn latency(args: LatencyArgs, out: &Out) -> Result<()> {
         let mut ticker = Ticker::new(args.count.count, true);
         while ticker.next().await {
             let elapsed = start.elapsed();
-            let rtt = pnet::ping(ip, PING_TIMEOUT).await.map(millis);
+            let rtt = pnet::latency_ms(ip).await;
             stats.add(rtt);
             if out.json {
                 json_line(&LatencySample {
@@ -731,7 +674,7 @@ fn latency(args: LatencyArgs, out: &Out) -> Result<()> {
 /// NetTools.ps1 `speed` (lines 136-177) / NetMaint TrafficPage.
 fn speed(args: SpeedArgs, out: &Out) -> Result<()> {
     let adapter = resolve_adapter(args.iface.as_deref())?;
-    let base = pnet::traffic(&adapter)?;
+    let mut meter = TrafficMeter::new(adapter.clone())?;
     if !out.json {
         out.title(&format!(
             "Bandwidth monitor on '{}' - Ctrl+C to stop",
@@ -755,22 +698,9 @@ fn speed(args: SpeedArgs, out: &Out) -> Result<()> {
         );
     }
     block_on(async {
-        let start = Instant::now();
-        let (mut prev, mut last) = (base, start);
         let mut ticker = Ticker::new(args.count.count, false);
         while ticker.next().await {
-            let cur = pnet::traffic(&adapter)?;
-            let now = Instant::now();
-            let (down_bps, up_bps) = traffic_rate(&prev, &cur, (now - last).as_secs_f64());
-            let sample = SpeedSample {
-                elapsed_s: (now - start).as_secs_f64(),
-                adapter: adapter.name.clone(),
-                down_bps,
-                up_bps,
-                total_down_bytes: cur.rx_bytes.saturating_sub(base.rx_bytes),
-                total_up_bytes: cur.tx_bytes.saturating_sub(base.tx_bytes),
-            };
-            (prev, last) = (cur, now);
+            let sample = meter.sample()?;
             if out.json {
                 json_line(&sample);
             } else {
@@ -778,7 +708,7 @@ fn speed(args: SpeedArgs, out: &Out) -> Result<()> {
                     out,
                     &format!(
                         "  {:<9}  {}  {}  {}  {}",
-                        format_elapsed(now - start),
+                        format_elapsed(meter.elapsed()),
                         format_bps(sample.down_bps / 8.0),
                         format_bps(sample.up_bps / 8.0),
                         format_bytes(sample.total_down_bytes),
@@ -795,7 +725,7 @@ fn speed(args: SpeedArgs, out: &Out) -> Result<()> {
 
 /// NetTools.ps1 `speedtest` (lines 196-206): runs the Ookla CLI.
 fn speedtest(out: &Out) -> Result<()> {
-    let exe = find_tool("speedtest", "Ookla.Speedtest.CLI")?;
+    let exe = find_tool("speedtest", pnet::SPEEDTEST_WINGET)?;
     let accept = ["--accept-license", "--accept-gdpr"];
     if !out.json {
         out.title("Speed test (Ookla)... approx 30 seconds");
@@ -807,13 +737,7 @@ fn speedtest(out: &Out) -> Result<()> {
         };
     }
     let text = process::capture(&exe, &[accept[0], accept[1], "--format=json"])?;
-    let last = text
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("");
-    let value: serde_json::Value = serde_json::from_str(last)
-        .map_err(|e| Error::Other(format!("speedtest returned invalid JSON: {e}")))?;
+    let value = parse_speedtest(&text)?;
     out.emit(&value, |_, _| {});
     Ok(())
 }
@@ -831,52 +755,15 @@ fn setip(args: SetipArgs, out: &Out) -> Result<()> {
     let adapter = pnet::setip_adapter(args.iface.as_deref().or(cfg.iface.as_deref()))?;
     let name = adapter.name;
     confirm(args.yes, &format!("Set {target} on '{name}'?"))?;
-    match target {
-        IpTarget::Dhcp => pnet::set_dhcp(&name)?,
-        IpTarget::Static {
-            address,
-            prefix,
-            gateway,
-        } => {
-            let gateway = gateway.map(|g| g.to_string());
-            pnet::set_static(&name, &format!("{address}/{prefix}"), gateway.as_deref())?;
-        }
-    }
+    pnet::apply_ip_target(&name, &target)?;
     out.ok(&format!("OK -> {target}"));
     // As SetIP.ps1: wait up to 8 s for a DHCP lease, 800 ms after a static change.
     // The change is done: a failing re-read only leaves the result without addresses.
-    let reread = || pnet::find_adapter(&name).ok();
-    let after = if target == IpTarget::Dhcp {
-        let mut after = reread();
-        for _ in 0..8 {
-            if after
-                .as_ref()
-                .and_then(Adapter::primary_ipv4)
-                .is_some_and(|c| !c.address.is_link_local())
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(1));
-            after = reread();
-        }
-        after
-    } else {
-        std::thread::sleep(Duration::from_millis(800));
-        reread()
-    };
+    let after = pnet::wait_for_change(&name, target == IpTarget::Dhcp);
     if after.is_none() {
         out.warn(&format!("could not read the new configuration of '{name}'"));
     }
-    let result = IpChange {
-        applied: target,
-        ipv4: after.as_ref().map(|a| a.ipv4.clone()).unwrap_or_default(),
-        gateways: after
-            .as_ref()
-            .map(|a| a.gateways.clone())
-            .unwrap_or_default(),
-        dhcp: after.as_ref().is_some_and(|a| a.dhcp),
-        adapter: name,
-    };
+    let result = IpChange::new(&name, target, after.as_ref());
     out.emit(&result, |r, out| {
         if r.ipv4.is_empty() {
             line(
@@ -927,21 +814,4 @@ fn flushdns(out: &Out) -> Result<()> {
         out.ok("OK -> DNS cache cleared")
     });
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn host_lists_split_and_dedupe() {
-        let args: Vec<String> = ["192.168.1.1,192.168.1.10", " 8.8.8.8 ", "192.168.1.1,,"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(
-            split_hosts(&args),
-            ["192.168.1.1", "192.168.1.10", "8.8.8.8"]
-        );
-    }
 }

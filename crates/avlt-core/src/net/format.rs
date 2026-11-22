@@ -180,8 +180,33 @@ pub fn format_elapsed(d: Duration) -> String {
     }
 }
 
+/// The result of the Ookla CLI run with `--format=json`: its last non-blank line.
+pub fn parse_speedtest(text: &str) -> crate::Result<serde_json::Value> {
+    let last = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    serde_json::from_str(last)
+        .map_err(|e| crate::Error::Other(format!("speedtest returned invalid JSON: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn speedtest_json_is_the_last_line() {
+        let v = parse_speedtest(
+            "{\"type\":\"log\"}
+{\"type\":\"result\"}
+
+",
+        )
+        .unwrap();
+        assert_eq!(v["type"], "result");
+        assert!(parse_speedtest("not json").is_err());
+    }
+
     use super::*;
 
     #[test]

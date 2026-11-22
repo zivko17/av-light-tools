@@ -11,6 +11,18 @@ use crate::net::ipv4::{parse_cidr, prefix_to_mask};
 /// Smallest prefix `net scan` accepts (/20 = 4094 hosts).
 pub const MIN_SCAN_PREFIX: u8 = 20;
 
+/// Splits comma-separated host lists (one per argument), dropping blanks and duplicates
+/// (order kept).
+pub fn split_hosts(args: &[String]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for h in args.iter().flat_map(|a| a.split(',')).map(str::trim) {
+        if !h.is_empty() && !hosts.iter().any(|x| x == h) {
+            hosts.push(h.to_string());
+        }
+    }
+    hosts
+}
+
 /// Network to sweep for `net scan [target]`, aligned to its prefix.
 ///
 /// Accepts three octets (`192.168.1`, as NetTools.ps1 `scan`), a CIDR
@@ -139,6 +151,22 @@ fn static_target(cidr: &str, gateway: Option<&str>) -> Result<IpTarget> {
 
 #[cfg(test)]
 mod tests {
+    use super::split_hosts;
+
+    #[test]
+    fn host_lists_split_and_dedupe() {
+        let args: Vec<String> = ["192.168.1.1,192.168.1.10", " 8.8.8.8 ", "192.168.1.1,,"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            split_hosts(&args),
+            ["192.168.1.1", "192.168.1.10", "8.8.8.8"]
+        );
+        // An argument with a space stays one (unresolvable) host, as in the CLI.
+        assert_eq!(split_hosts(&["a b,c".into()]), ["a b", "c"]);
+    }
+
     use super::*;
     use crate::config::Config;
 
