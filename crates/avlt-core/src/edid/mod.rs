@@ -383,6 +383,24 @@ mod tests {
         );
     }
 
+    /// The committed `.bin` fixtures (used by the CLI tests) are exactly the synthetic
+    /// EDIDs. Regenerate with `AVLT_WRITE_FIXTURES=1 cargo test -p avlt-core fixtures`.
+    #[test]
+    fn committed_fixtures_match_synthetic() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/edid");
+        for (name, bytes) in [
+            ("synthetic_base.bin", synthetic_base().to_vec()),
+            ("synthetic_cta.bin", synthetic_with_cta()),
+        ] {
+            let path = dir.join(name);
+            if std::env::var_os("AVLT_WRITE_FIXTURES").is_some() {
+                std::fs::write(&path, &bytes).unwrap();
+            }
+            let on_disk = std::fs::read(&path).unwrap();
+            assert_eq!(on_disk, bytes, "{name} is stale");
+        }
+    }
+
     #[test]
     fn raw_serializes_as_hex() {
         let e = decode(&synthetic_base());
