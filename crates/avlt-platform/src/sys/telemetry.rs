@@ -76,22 +76,19 @@ mod imp {
         fn open() -> Option<GpuCounter> {
             let mut query = PDH_HQUERY::default();
             let mut counter = PDH_HCOUNTER::default();
-            // SAFETY: out-parameters owned by this frame; the query is closed on failure
-            // here or in Drop.
+            // SAFETY: out-parameters owned by this frame; the query is closed here on
+            // failure, otherwise exactly once by Drop.
             unsafe {
                 if PdhOpenQueryW(None, 0, &mut query) != 0 {
                     return None;
                 }
-                let gpu = GpuCounter { query, counter };
-                if PdhAddEnglishCounterW(gpu.query, &HSTRING::from(GPU_COUNTER), 0, &mut counter)
-                    != 0
-                {
+                if PdhAddEnglishCounterW(query, &HSTRING::from(GPU_COUNTER), 0, &mut counter) != 0 {
+                    let _ = PdhCloseQuery(query);
                     return None;
                 }
-                let gpu = GpuCounter { counter, ..gpu };
                 // Rate counters need a first collection to compare against.
-                let _ = PdhCollectQueryData(gpu.query);
-                Some(gpu)
+                let _ = PdhCollectQueryData(query);
+                Some(GpuCounter { query, counter })
             }
         }
 
