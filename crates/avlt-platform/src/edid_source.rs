@@ -7,9 +7,13 @@
 //! blob with extensions) and, failing that, block by block from WMI
 //! `WmiMonitorDescriptorMethods`.
 
+use std::path::{Path, PathBuf};
+
+use avlt_core::edid::{self, Edid};
+use avlt_core::media::write_new;
 use serde::{Serialize, Serializer};
 
-use crate::Result;
+use crate::{Error, Result};
 
 /// Where a display's EDID came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -52,6 +56,171 @@ pub fn displays() -> Result<Vec<DisplayDevice>> {
 /// that display falls back to the next source or is reported `Unavailable`.
 pub fn list(remembered: bool) -> Result<Vec<DisplayDevice>> {
     imp::list(remembered)
+}
+
+/// One row of `edid list`: a display and the summary of its EDID.
+#[derive(Debug, Clone, Serialize)]
+pub struct DisplayEntry {
+    #[serde(flatten)]
+    pub device: DisplayDevice,
+    pub manufacturer: Option<String>,
+    pub model: Option<String>,
+    pub year: Option<u16>,
+    pub version: Option<String>,
+    pub preferred: Option<String>,
+    pub caps: Vec<String>,
+}
+
+impl DisplayEntry {
+    /// Summarises `device`'s EDID (fields stay empty without one).
+    pub fn new(device: DisplayDevice) -> DisplayEntry {
+        let e = (!device.edid.is_empty()).then(|| edid::decode(&device.edid));
+        let base = e.as_ref().and_then(|e| e.base.as_ref());
+        DisplayEntry {
+            manufacturer: base.map(|b| b.manufacturer.clone()),
+            model: base.map(|b| {
+                b.monitor_name
+                    .clone()
+                    .unwrap_or_else(|| format!("0x{:04X}", b.product_code))
+            }),
+            year: base.map(|b| b.year),
+            version: base.map(|b| b.version.clone()),
+            preferred: base
+                .and_then(|b| b.native.as_ref())
+                .map(|t| t.summary.clone()),
+            caps: e
+                .as_ref()
+                .filter(|e| e.base.is_some())
+                .map(edid::caps)
+                .unwrap_or_default(),
+            device,
+        }
+    }
+}
+
+/// [`list`] with each display's EDID summary.
+pub fn entries(remembered: bool) -> Result<Vec<DisplayEntry>> {
+    Ok(list(remembered)?
+        .into_iter()
+        .map(DisplayEntry::new)
+        .collect())
+}
+
+/// `registry`, `wmi` or `unavailable`.
+pub fn source_name(s: EdidSource) -> &'static str {
+    match s {
+        EdidSource::Registry => "registry",
+        EdidSource::Wmi => "wmi",
+        EdidSource::Unavailable => "unavailable",
+    }
+}
+
+/// A resolved EDID: where it came from and its decode.
+#[derive(Debug, Clone)]
+pub struct ResolvedEdid {
+    /// `display 2` or the file name.
+    pub name: String,
+    /// Display number when the source is a display.
+    pub display: Option<usize>,
+    pub edid: Edid,
+}
+
+/// `"1"` (display number) or a path to a .bin file (`Resolve-EDIDSource`).
+pub fn resolve(source: &str, remembered: bool) -> Result<ResolvedEdid> {
+    let s = source.trim().trim_matches('"');
+    if let Ok(n) = s.parse::<usize>() {
+        let devs = list(remembered)?;
+        let dev = devs.into_iter().find(|d| d.index == n).ok_or_else(|| {
+            Error::InvalidInput(format!(
+                "No display with index {n}. Run 'avlt edid list' to see them."
+            ))
+        })?;
+        return from_device(dev);
+    }
+    resolve_file(Path::new(s))
+}
+
+/// A display already listed, decoded (fails when it reported no EDID).
+pub fn from_device(dev: DisplayDevice) -> Result<ResolvedEdid> {
+    if dev.edid.is_empty() {
+        return Err(Error::Other(format!(
+            "Display {} reported no EDID (source: {}).",
+            dev.index,
+            source_name(dev.source)
+        )));
+    }
+    Ok(ResolvedEdid {
+        name: format!("display {}", dev.index),
+        display: Some(dev.index),
+        edid: edid::decode(&dev.edid),
+    })
+}
+
+/// A .bin EDID file, decoded.
+pub fn resolve_file(path: &Path) -> Result<ResolvedEdid> {
+    if !path.is_file() {
+        return Err(Error::InvalidInput(format!(
+            "File not found: {}",
+            path.display()
+        )));
+    }
+    let bytes = std::fs::read(path)?;
+    Ok(ResolvedEdid {
+        name: path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        display: None,
+        edid: edid::decode(&bytes),
+    })
+}
+
+/// Every display with an EDID, as resolved sources.
+pub fn all_displays(remembered: bool) -> Result<Vec<ResolvedEdid>> {
+    Ok(list(remembered)?
+        .into_iter()
+        .filter(|d| !d.edid.is_empty())
+        .map(|d| ResolvedEdid {
+            name: format!("display {}", d.index),
+            display: Some(d.index),
+            edid: edid::decode(&d.edid),
+        })
+        .collect())
+}
+
+/// One file written (or failed) by [`dump_all`].
+#[derive(Debug, Clone, Serialize)]
+pub struct DumpOut {
+    pub source: String,
+    pub path: Option<PathBuf>,
+    pub bytes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Writes every target into `dir` as `<MFG>_<model>[_out<n>].bin`, never overwriting.
+/// A failed write is recorded and does not stop the rest; returns the per-file results
+/// and the number of failures.
+pub fn dump_all(targets: &[ResolvedEdid], dir: &Path) -> (Vec<DumpOut>, usize) {
+    let mut written = Vec::new();
+    let mut failed = 0usize;
+    for t in targets {
+        let name = edid::dump_file_name(&t.edid, t.display);
+        let (path, error) = match write_new(&dir.join(name), &t.edid.raw) {
+            Ok(p) => (Some(p), None),
+            Err(e) => {
+                failed += 1;
+                (None, Some(e.to_string()))
+            }
+        };
+        written.push(DumpOut {
+            source: t.name.clone(),
+            path,
+            bytes: t.edid.raw.len(),
+            error,
+        });
+    }
+    (written, failed)
 }
 
 /// `DISPLAY\GSM5B09\5&2b6e2b7&0&UID4353_0` (WMI form) -> PnP instance ID.
@@ -268,6 +437,37 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn resolved(bytes: &[u8], display: Option<usize>) -> ResolvedEdid {
+        ResolvedEdid {
+            name: "x".into(),
+            display,
+            edid: edid::decode(bytes),
+        }
+    }
+
+    #[test]
+    fn dump_all_continues_after_a_failed_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no_such_subdir");
+        let targets = [resolved(&[], Some(1)), resolved(&[], Some(2))];
+
+        // Every write fails (folder missing): each entry carries an error, none abort the loop.
+        let (res, failed) = dump_all(&targets, &missing);
+        assert_eq!(failed, 2);
+        assert_eq!(res.len(), 2);
+        assert!(res.iter().all(|r| r.error.is_some() && r.path.is_none()));
+
+        let (res, failed) = dump_all(&targets, dir.path());
+        assert_eq!(failed, 0);
+        assert!(res.iter().all(|r| r.error.is_none() && r.path.is_some()));
+    }
+
+    #[test]
+    fn a_missing_file_is_invalid_input() {
+        let err = resolve("definitely/not/here.bin", false).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
+    }
 
     #[test]
     fn wmi_suffix_is_stripped() {

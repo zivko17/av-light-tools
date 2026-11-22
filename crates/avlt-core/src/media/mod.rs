@@ -18,7 +18,7 @@ pub use ffargs::{
     normalize_pass1_args, normalize_pass2_args, normalize_single_pass_args, probe_args,
     resample_args, suffixed_name, trim_args,
 };
-pub use paths::non_colliding;
+pub use paths::{non_colliding, write_new};
 pub use presets::{Channels, ExtractFormat, Preset, SAMPLE_RATES};
 
 /// Extensions `Get-AudioInputs` accepts when it walks a folder.
