@@ -1,0 +1,36 @@
+# avlt.toml - optional configuration for avlt.exe.
+#
+# Copy this file next to avlt.exe and rename it to avlt.toml.
+# Every field is optional; the values below are the defaults or examples.
+# Unknown keys are rejected so typos are caught.
+#
+# Having an avlt.toml (or an _OUTPUT folder) next to the exe also turns on
+# portable mode: output goes to <exe folder>\_OUTPUT.
+
+# Default network adapter for `avlt net info`, `net speed`, `net setip`,
+# `net reset-nic` and the GUI.
+# Default: the adapter that owns the default route.
+# iface = "Ethernet 2"
+
+# City for `avlt util weather`. Default: Madrid.
+# weather_city = "Ibiza"
+
+# Output folder for dumps, conversions, etc. Relative paths are resolved
+# against the folder that holds avlt.exe.
+# Default: <exe folder>\_OUTPUT in portable mode, otherwise Documents\AVLT
+# (Music\AVLT for media output).
+# output_dir = "out"
+
+# Named static IPv4 profiles for `avlt net setip <name>`.
+# If you define none, two default profiles exist:
+#   0 = 192.168.0.99/24, gateway 192.168.0.1
+#   1 = 192.168.1.99/24, gateway 192.168.1.1
+# Defining any [ip_profiles.*] table replaces those defaults.
+# `dhcp` is a keyword of its own, not a profile.
+#
+# [ip_profiles."0"]
+# address = "192.168.0.99/24"   # CIDR form
+# gateway = "192.168.0.1"       # optional
+#
+# [ip_profiles."stage"]
+# address = "10.10.0.50/16"

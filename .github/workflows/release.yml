@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: build and publish avlt.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag must match the avlt crate version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $meta = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'avlt' }).version
+          if ($tag -ne $version) {
+            Write-Error "tag '$tag' != avlt crate version '$version'"
+            exit 1
+          }
+      - name: Build release executable
+        run: cargo build --release -p avlt --locked
+      - name: Check it runs
+        shell: bash
+        run: target/release/avlt.exe --version
+      - name: Stage assets and compute SHA-256
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/avlt.exe dist/avlt.exe
+          $hash = (Get-FileHash dist/avlt.exe -Algorithm SHA256).Hash.ToLower()
+          # sha256sum format: "<hash>  <file>"
+          # LF, no BOM
+          [IO.File]::WriteAllText("dist/avlt.exe.sha256", "$hash  avlt.exe`n")
+          Get-Content dist/avlt.exe.sha256
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2.2.2
+        with:
+          files: |
+            dist/avlt.exe
+            dist/avlt.exe.sha256
+          generate_release_notes: true

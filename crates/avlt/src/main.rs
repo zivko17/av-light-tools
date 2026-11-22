@@ -1,0 +1,41 @@
+//! avlt: AV / lighting / IT field toolbox.
+#![forbid(unsafe_code)]
+
+mod cli;
+mod gui;
+
+use std::process::ExitCode;
+
+use clap::{CommandFactory, Parser};
+
+use cli::Cli;
+use cli::output::Out;
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let out = Out::new(cli.json);
+    let Some(command) = cli.command else {
+        // Double-click in Explorer: Windows made a console just for this process. Open the
+        // GUI, which drops that console (its window closes) and reports a failure to open
+        // in a message box.
+        if avlt_platform::console::owns_console_alone() {
+            return match gui::run() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_) => ExitCode::FAILURE,
+            };
+        }
+        // No arguments from a terminal: show the help.
+        return match Cli::command().print_help() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    };
+    match cli::run(command, &out) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            out.err(&e.to_string());
+            ExitCode::from(u8::try_from(e.exit_code()).unwrap_or(1))
+        }
+    }
+}

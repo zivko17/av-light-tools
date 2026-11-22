@@ -1,0 +1,27 @@
+[package]
+name = "avlt"
+description = "AV / lighting / IT field toolbox: one portable executable, CLI and GUI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "avlt"
+path = "src/main.rs"
+
+[dependencies]
+avlt-core.workspace = true
+avlt-platform.workspace = true
+clap.workspace = true
+serde.workspace = true
+# preserve_order: the GUI shows result fields in struct order, not sorted.
+serde_json = { workspace = true, features = ["preserve_order"] }
+chrono.workspace = true
+tokio = { workspace = true, features = ["signal", "sync", "rt"] }
+eframe = { workspace = true, default-features = false, features = ["default_fonts", "glow", "clipboard", "x11"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

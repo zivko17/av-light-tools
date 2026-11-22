@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/avlt-core", "crates/avlt-platform", "crates/avlt"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+avlt-core = { path = "crates/avlt-core" }
+avlt-platform = { path = "crates/avlt-platform" }
+clap = { version = "4.6.9", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.2"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time"] }
+eframe = "0.37.0"
+windows = { version = "0.62.2", features = ["Win32_Foundation"] }
+wmi = "0.18.4"
+winreg = "0.56.0"
+sysinfo = "0.40.4"
+# native-tls = SChannel on Windows: system certificate store, no C toolchain needed.
+ureq = { version = "3.5.2", default-features = false, features = ["native-tls"] }
+tempfile = "3.27.0"
+# Local time for timestamps (backup folder names, sample times); already in the tree via wmi.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
