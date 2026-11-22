@@ -17,9 +17,8 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// Groups whose subcommands are still stubs (`calc` is implemented; see `cli_calc.rs`).
-const GROUPS: [(&str, &[&str]); 6] = [
-    ("edid", &["list", "info", "check", "diff", "dump"]),
+/// Groups whose subcommands are still stubs (`calc` and `edid` are implemented; see `cli_calc.rs`, `cli_edid.rs`).
+const GROUPS: [(&str, &[&str]); 5] = [
     (
         "net",
         &[

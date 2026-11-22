@@ -83,6 +83,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -102,6 +103,7 @@ version = "0.1.0"
 dependencies = [
  "avlt-core",
  "serde",
+ "serde_json",
  "sysinfo",
  "tokio",
  "ureq",

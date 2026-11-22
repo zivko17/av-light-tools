@@ -17,5 +17,8 @@ wmi.workspace = true
 winreg.workspace = true
 ureq.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true
