@@ -5,7 +5,7 @@ members = ["crates/avlt-core", "crates/avlt-platform", "crates/avlt"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 avlt-core = { path = "crates/avlt-core" }

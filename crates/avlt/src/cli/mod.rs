@@ -10,8 +10,6 @@ pub(crate) mod live;
 pub mod media;
 pub mod ndi;
 pub mod net;
-// The presentation helpers are used by the subcommands that Tasks 1-5 port.
-#[allow(dead_code)]
 pub mod output;
 pub mod sys;
 pub mod util;

@@ -26,8 +26,9 @@ pub(crate) fn pin_mta() {
             return;
         }
         // SAFETY: all optional pointers are None; -1 lets COM choose the services. The
-        // same call the `wmi` crate makes. RPC_E_TOO_LATE (security already set, e.g.
-        // by a host process) is fine, so the result is ignored.
+        // same call the `wmi` crate makes. Every error is deliberately ignored: the
+        // expected one is RPC_E_TOO_LATE (security already set, e.g. by a host process),
+        // and any other failure only leaves COM on its process defaults.
         let _ = unsafe {
             CoInitializeSecurity(
                 None,
