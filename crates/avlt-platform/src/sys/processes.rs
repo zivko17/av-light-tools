@@ -1,6 +1,6 @@
 //! `sys top` and `sys killp` (Top.ps1, KillP.ps1, AVToolbox `Top`).
 
-use avlt_core::sys::model::{ProcessInfo, TopSample};
+use avlt_core::sys::model::{KillResult, ProcessInfo, TopSample};
 
 use crate::Result;
 
@@ -28,6 +28,33 @@ impl TopSampler {
 /// substring with `wildcard`), sorted by name then PID. `cpu_pct` is 0.
 pub fn find_processes(pattern: &str, wildcard: bool) -> Result<Vec<ProcessInfo>> {
     imp::find_processes(pattern, wildcard)
+}
+
+/// Kills each of `to_kill` and records `skipped` (critical processes left alone) as
+/// skipped: one [`KillResult`] per process, skipped ones first. Never refuses on its
+/// own; callers decide with [`avlt_core::sys::process::kill_plan`].
+pub fn kill_all(to_kill: &[&ProcessInfo], skipped: &[&ProcessInfo]) -> Vec<KillResult> {
+    let mut results: Vec<KillResult> = skipped
+        .iter()
+        .map(|p| KillResult {
+            name: p.name.clone(),
+            pid: p.pid,
+            killed: false,
+            skipped: true,
+            error: None,
+        })
+        .collect();
+    for p in to_kill {
+        let result = kill(p.pid);
+        results.push(KillResult {
+            name: p.name.clone(),
+            pid: p.pid,
+            killed: result.is_ok(),
+            skipped: false,
+            error: result.err().map(|e| e.to_string()),
+        });
+    }
+    results
 }
 
 /// Terminates process `pid` (Stop-Process -Force).
