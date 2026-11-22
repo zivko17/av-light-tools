@@ -247,7 +247,8 @@ mod windows {
         let pid = fake.pid();
 
         let o = avlt(&["sys", "killp", "System", "--pid", &pid, "--yes", "--json"]);
-        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+        assert!(stderr(&o).contains("are protected; nothing was terminated"));
         let v = json(&o);
         assert_only(&v, fake.child.id());
         assert_eq!(v["results"][0]["killed"], false, "{v}");
@@ -320,12 +321,12 @@ mod windows {
         let pid = fake.pid();
         // No --yes, and --pid restricts the match to the fake.
         let o = avlt(&["sys", "killp", "explorer", "--pid", &pid]);
-        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
         assert!(stdout(&o).contains("<- CRITICAL"), "{}", stdout(&o));
         assert!(stdout(&o).contains("Skipped"), "{}", stdout(&o));
         assert!(stderr(&o).contains("--include-critical"), "{}", stderr(&o));
         let o = avlt(&["sys", "killp", "explorer", "--pid", &pid, "--json"]);
-        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
         let v = json(&o);
         assert_only(&v, fake.child.id());
         assert_eq!(v["results"][0]["skipped"], true, "{v}");

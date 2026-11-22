@@ -617,6 +617,12 @@ fn killp(args: KillpArgs, out: &Out) -> Result<()> {
             "{failed} of {attempted} processes could not be killed"
         )));
     }
+    let skipped = report.results.len() - attempted;
+    if attempted == 0 && skipped > 0 {
+        return Err(Error::Other(format!(
+            "{skipped} matching processes are protected; nothing was terminated"
+        )));
+    }
     Ok(())
 }
 

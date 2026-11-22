@@ -273,8 +273,9 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn kill_of_a_missing_pid_is_an_error() {
-        // PIDs are multiples of 4; this one is never valid.
-        assert!(kill(0xFFFF_FFF3).is_err());
+        // Windows ignores the low 2 bits of a PID (so 5 would hit PID 4, System): use a
+        // high value with those bits clear that no process can own.
+        assert!(kill(0xFFFF_FFF0).is_err());
     }
 
     #[cfg(windows)]

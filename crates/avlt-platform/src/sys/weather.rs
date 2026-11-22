@@ -18,10 +18,14 @@ pub fn fetch_weather(url: &str) -> Result<String> {
     fetch(url, WEATHER_TIMEOUT)
 }
 
+/// The report's leading spaces are part of the layout: only trailing whitespace goes.
+fn clean_body(body: &str) -> String {
+    body.trim_end().to_string()
+}
+
 fn fetch(url: &str, timeout: Duration) -> Result<String> {
-    // trim_end only: the report's leading spaces are part of the layout.
     match crate::net::http::get_text_with_agent(url, timeout, USER_AGENT)
-        .map(|b| b.trim_end().to_string())
+        .map(|b| clean_body(&b))
     {
         Err(Error::Other(e)) => Err(Error::Other(format!(
             "could not fetch weather ({e}). Check internet connection."
@@ -33,6 +37,16 @@ fn fetch(url: &str, timeout: Duration) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn body_keeps_leading_whitespace_and_drops_trailing() {
+        assert_eq!(clean_body("  
+   Paris: +9C
+
+ "), "  
+   Paris: +9C");
+        assert_eq!(clean_body(""), "");
+    }
 
     #[test]
     fn user_agent_is_a_console_client() {
