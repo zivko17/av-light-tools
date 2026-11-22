@@ -10,6 +10,7 @@ avlt-core.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 sysinfo.workspace = true
+chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
