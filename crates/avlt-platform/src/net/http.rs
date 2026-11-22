@@ -1,0 +1,66 @@
+//! Small HTTPS GETs (public IP, online MAC vendor lookup) through the system TLS stack.
+
+use std::time::Duration;
+
+use crate::Result;
+
+/// Body of `GET url`, trimmed. Non-2xx answers and timeouts are errors.
+pub fn get_text(url: &str, timeout: Duration) -> Result<String> {
+    imp::get_text(url, timeout)
+}
+
+/// Public IPv4 address from api.ipify.org (MyIP.ps1), `None` without internet.
+pub fn public_ip(timeout: Duration) -> Option<String> {
+    get_text("https://api.ipify.org", timeout)
+        .ok()
+        .filter(|ip| ip.parse::<std::net::IpAddr>().is_ok())
+}
+
+/// Vendor from api.macvendors.com for the OUI of `mac` (NetTools.ps1 `whoison`),
+/// `None` if unknown or offline.
+pub fn vendor_online(mac: &str, timeout: Duration) -> Option<String> {
+    let oui = avlt_core::net::oui::oui_prefix(mac)?;
+    get_text(&format!("https://api.macvendors.com/{oui:06X}"), timeout)
+        .ok()
+        .filter(|v| !v.is_empty() && !v.starts_with('{'))
+}
+
+#[cfg(windows)]
+mod imp {
+    use std::time::Duration;
+
+    use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
+
+    use crate::{Error, Result};
+
+    pub fn get_text(url: &str, timeout: Duration) -> Result<String> {
+        // rustls is not compiled in: native-tls (SChannel) must be selected explicitly,
+        // with the Windows certificate store as roots.
+        let tls = TlsConfig::builder()
+            .provider(TlsProvider::NativeTls)
+            .root_certs(RootCerts::PlatformVerifier)
+            .build();
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .tls_config(tls)
+                .timeout_global(Some(timeout))
+                .user_agent(concat!("avlt/", env!("CARGO_PKG_VERSION")))
+                .build(),
+        );
+        let fail = |e: ureq::Error| Error::Other(format!("GET {url}: {e}"));
+        let mut resp = agent.get(url).call().map_err(fail)?;
+        let body = resp.body_mut().read_to_string().map_err(fail)?;
+        Ok(body.trim().to_string())
+    }
+}
+
+#[cfg(not(windows))]
+mod imp {
+    use std::time::Duration;
+
+    use crate::{Error, Result};
+
+    pub fn get_text(_url: &str, _timeout: Duration) -> Result<String> {
+        Err(Error::Unsupported)
+    }
+}
