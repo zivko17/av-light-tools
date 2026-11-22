@@ -14,7 +14,7 @@ use avlt_core::sys::model::{
     AudioDevice, CleanStatus, Display, DisplayMode, KillReport, KillResult, ProcessInfo, Telemetry,
     TopSample, Volume,
 };
-use avlt_core::sys::process::{is_protected_process, kill_plan};
+use avlt_core::sys::process::{is_protected_process, kill_plan, restrict_to_pids};
 use avlt_core::sys::{AUDIO_RESTART_SERVICE, AUDIO_SERVICES};
 use avlt_core::{Error, Result};
 use avlt_platform::sys as psys;
@@ -82,6 +82,9 @@ pub struct KillpArgs {
     /// Match every process whose name contains NAME
     #[arg(short, long)]
     pub wildcard: bool,
+    /// Only processes with this PID (repeatable); the name must still match
+    #[arg(long = "pid", value_name = "PID")]
+    pub pids: Vec<u32>,
     /// Also kill critical system processes (svchost, csrss, explorer...). Always asks
     /// interactively; --yes does not answer that question
     #[arg(long)]
@@ -480,10 +483,11 @@ fn top(args: TopArgs, out: &Out) -> Result<()> {
 /// KillP.ps1: list the matches (critical ones flagged), confirm, kill.
 fn killp(args: KillpArgs, out: &Out) -> Result<()> {
     let own = std::process::id();
-    let matched: Vec<ProcessInfo> = psys::find_processes(&args.name, args.wildcard)?
-        .into_iter()
-        .filter(|p| p.pid != own)
-        .collect();
+    let matched: Vec<ProcessInfo> =
+        restrict_to_pids(psys::find_processes(&args.name, args.wildcard)?, &args.pids)
+            .into_iter()
+            .filter(|p| p.pid != own)
+            .collect();
     let mut report = KillReport {
         pattern: args.name.clone(),
         wildcard: args.wildcard,
@@ -527,7 +531,7 @@ fn killp(args: KillpArgs, out: &Out) -> Result<()> {
             );
         }
     }
-    let (to_kill, skipped) = kill_plan(&report.matched, args.include_critical);
+    let (to_kill, skipped) = kill_plan(&report.matched, args.include_critical, &args.pids);
     let critical: Vec<&ProcessInfo> = to_kill
         .iter()
         .copied()

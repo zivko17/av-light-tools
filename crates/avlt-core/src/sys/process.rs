@@ -88,13 +88,29 @@ pub fn is_protected_process(pid: u32, name: &str) -> bool {
 
 /// `sys killp` split: `(to_kill, skipped)`. Critical processes are always skipped unless
 /// `include_critical` (which the CLI only honours after an interactive answer).
-pub fn kill_plan(
-    matched: &[ProcessInfo],
+///
+/// A non-empty `pids` (`--pid`) drops every process whose PID is not listed, from both
+/// lists.
+pub fn kill_plan<'a>(
+    matched: &'a [ProcessInfo],
     include_critical: bool,
-) -> (Vec<&ProcessInfo>, Vec<&ProcessInfo>) {
+    pids: &[u32],
+) -> (Vec<&'a ProcessInfo>, Vec<&'a ProcessInfo>) {
     matched
         .iter()
+        .filter(|p| pids.is_empty() || pids.contains(&p.pid))
         .partition(|p| include_critical || !(p.critical || is_protected_process(p.pid, &p.name)))
+}
+
+/// `sys killp --pid`: keeps only the processes whose PID is listed (all when empty).
+pub fn restrict_to_pids(matched: Vec<ProcessInfo>, pids: &[u32]) -> Vec<ProcessInfo> {
+    if pids.is_empty() {
+        return matched;
+    }
+    matched
+        .into_iter()
+        .filter(|p| pids.contains(&p.pid))
+        .collect()
 }
 
 #[cfg(test)]
@@ -112,6 +128,35 @@ mod tests {
     }
 
     #[test]
+    fn pid_filter_excludes_every_other_pid() {
+        let procs = [
+            p("victim", 100),
+            p("victim", 104),
+            p("System", 4),
+            p("other", 108),
+        ];
+        let pids = |v: &[&ProcessInfo]| v.iter().map(|p| p.pid).collect::<Vec<_>>();
+        // Only the listed PID survives, whatever the name or criticality, in both lists.
+        for include in [false, true] {
+            let (kill, skip) = kill_plan(&procs, include, &[104]);
+            assert_eq!(pids(&kill), [104], "include_critical={include}");
+            assert!(skip.is_empty());
+        }
+        let (kill, skip) = kill_plan(&procs, true, &[4]);
+        assert_eq!(pids(&kill), [4]);
+        assert!(skip.is_empty());
+        let (kill, skip) = kill_plan(&procs, false, &[4]);
+        assert!(kill.is_empty());
+        assert_eq!(pids(&skip), [4]);
+        // A PID that matched nothing selects nothing (never "everything").
+        let (kill, skip) = kill_plan(&procs, true, &[999]);
+        assert!(kill.is_empty() && skip.is_empty());
+        let kept = restrict_to_pids(procs.to_vec(), &[100, 108]);
+        assert_eq!(kept.iter().map(|p| p.pid).collect::<Vec<_>>(), [100, 108]);
+        assert_eq!(restrict_to_pids(procs.to_vec(), &[]).len(), 4);
+    }
+
+    #[test]
     fn critical_processes_are_skipped_by_default() {
         let procs = [
             p("svchost", 4),
@@ -119,11 +164,11 @@ mod tests {
             p("System", 12),
             p("arena", 16),
         ];
-        let (kill, skip) = kill_plan(&procs, false);
+        let (kill, skip) = kill_plan(&procs, false, &[]);
         let pids = |v: &[&ProcessInfo]| v.iter().map(|p| p.pid).collect::<Vec<_>>();
         assert_eq!(pids(&kill), [8, 16]);
         assert_eq!(pids(&skip), [4, 12]);
-        let (kill, skip) = kill_plan(&procs, true);
+        let (kill, skip) = kill_plan(&procs, true, &[]);
         assert_eq!(pids(&kill), [4, 8, 12, 16]);
         assert!(skip.is_empty());
         // Kernel processes count as critical even though KillP.ps1's list lacks them.
@@ -132,13 +177,13 @@ mod tests {
             p("Secure System", 332),
             p("Registry", 9),
         ];
-        let (kill, skip) = kill_plan(&kernel, false);
+        let (kill, skip) = kill_plan(&kernel, false, &[]);
         assert!(kill.is_empty());
         assert_eq!(pids(&skip), [0, 332, 9]);
         assert!(is_protected_process(4, "anything"));
         assert!(!is_protected_process(1234, "SystemSettings"));
         let one = [p("ctfmon", 1)];
-        let (kill, skip) = kill_plan(&one, false);
+        let (kill, skip) = kill_plan(&one, false, &[]);
         assert!(kill.is_empty());
         assert_eq!(pids(&skip), [1]);
     }
