@@ -25,6 +25,8 @@ sysinfo = "0.40.4"
 # native-tls = SChannel on Windows: system certificate store, no C toolchain needed.
 ureq = { version = "3.5.2", default-features = false, features = ["native-tls"] }
 tempfile = "3.27.0"
+# Local time for timestamps (backup folder names, sample times); already in the tree via wmi.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [profile.release]
 lto = true

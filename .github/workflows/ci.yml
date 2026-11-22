@@ -38,6 +38,13 @@ jobs:
         run: |
           target/release/avlt.exe net info --json
           target/release/avlt.exe net portscan 127.0.0.1 --json
+      - name: Smoke test (sys, util)
+        shell: bash
+        run: |
+          target/release/avlt.exe sys info --json
+          target/release/avlt.exe sys disks --json
+          target/release/avlt.exe sys startup --json
+          target/release/avlt.exe util timer 1s
       - uses: actions/upload-artifact@v4
         with:
           name: avlt-windows-x64

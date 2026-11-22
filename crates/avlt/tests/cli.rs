@@ -17,28 +17,8 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// Groups whose subcommands are still stubs (`calc`, `edid`, `net`, `media` and `ndi` are implemented; see `cli_*.rs`).
-const GROUPS: [(&str, &[&str]); 2] = [
-    (
-        "sys",
-        &[
-            "info",
-            "tele",
-            "top",
-            "killp",
-            "usb",
-            "disks",
-            "monitors",
-            "monitors-arrange",
-            "battery",
-            "startup",
-            "audio",
-            "services-audio",
-            "cleanup",
-        ],
-    ),
-    ("util", &["backup", "search", "weather", "timer"]),
-];
+/// Groups whose subcommands are still stubs: none left (every group has its own `cli_*.rs`).
+const GROUPS: [(&str, &[&str]); 0] = [];
 
 #[test]
 fn help_lists_all_groups() {
