@@ -111,7 +111,7 @@ pub fn screen(input: &ScreenInput) -> Result<ScreenResult> {
     } else if distance > 0.0 {
         let height = distance / f64::from(ratio);
         let diag = height * diag_factor;
-        let inches = if input.unit == "m" {
+        let inches = if input.unit.eq_ignore_ascii_case("m") {
             diag * 39.37
         } else {
             diag * 12.0
@@ -148,6 +148,25 @@ mod tests {
 
     fn close(a: f64, b: f64) {
         assert!((a - b).abs() < TOL, "{a} != {b}");
+    }
+
+    #[test]
+    fn unit_m_is_case_insensitive() {
+        let base = ScreenInput {
+            distance: 6.0,
+            ..d()
+        };
+        let lower = screen(&ScreenInput {
+            unit: "m".into(),
+            ..base.clone()
+        })
+        .unwrap();
+        let upper = screen(&ScreenInput {
+            unit: "M".into(),
+            ..base
+        })
+        .unwrap();
+        close(upper.diagonal_in.unwrap(), lower.diagonal_in.unwrap());
     }
 
     // 4:3 gives an exact diagonal factor sqrt((4/3)^2 + 1) = 5/3 (AVCalc.ps1 line 89).

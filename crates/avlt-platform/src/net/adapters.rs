@@ -54,7 +54,7 @@ pub(crate) fn pick_setip(mut all: Vec<Adapter>, preferred: Option<&str>) -> Resu
         _ => {
             let names: Vec<&str> = all.iter().map(|a| a.name.as_str()).collect();
             Err(Error::InvalidInput(format!(
-                "no adapter named 'Ethernet' and the default route is not on wired Ethernet;                  choose one with --iface (available: {})",
+                "no adapter named 'Ethernet' and the default route is not on wired Ethernet; choose one with --iface (available: {})",
                 names.join(", ")
             )))
         }
@@ -366,6 +366,7 @@ mod tests {
         ];
         let err = pick_setip(all, None).unwrap_err();
         assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
+        assert!(!err.to_string().contains("  "), "{err}");
         let msg = err.to_string();
         assert!(msg.contains("--iface"), "{msg}");
         assert!(msg.contains("Wi-Fi") && msg.contains("Ethernet 2"), "{msg}");

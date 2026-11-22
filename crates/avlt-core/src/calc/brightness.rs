@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use super::require_positive;
+use super::{require_non_negative, require_positive};
 use crate::error::{Error, Result};
 
 /// Content type; sets the AVIXA contrast-ratio target.
@@ -51,7 +51,7 @@ pub struct BrightnessResult {
 
 /// Required display brightness for an ambient light level.
 pub fn brightness(input: &BrightnessInput) -> Result<BrightnessResult> {
-    let lux = require_positive("ambient lux", input.ambient_lux)?;
+    let lux = require_non_negative("ambient lux", input.ambient_lux)?;
     let reflectance = require_positive("reflectance", input.reflectance)?;
     if reflectance > 1.0 {
         return Err(Error::InvalidInput(format!(
@@ -122,9 +122,15 @@ mod tests {
     }
 
     #[test]
+    fn zero_lux_needs_zero_nits() {
+        let r = brightness(&lux(0.0)).unwrap();
+        close(r.reflected_nits, 0.0);
+        close(r.required_nits, 0.0);
+    }
+
+    #[test]
     fn invalid_input() {
         for bad in [
-            lux(0.0),
             lux(-100.0),
             lux(f64::NAN),
             BrightnessInput {
