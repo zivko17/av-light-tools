@@ -33,6 +33,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --release -p avlt
+      - name: Smoke test (net)
+        shell: bash
+        run: |
+          target/release/avlt.exe net info --json
+          target/release/avlt.exe net portscan 127.0.0.1 --json
       - uses: actions/upload-artifact@v4
         with:
           name: avlt-windows-x64
