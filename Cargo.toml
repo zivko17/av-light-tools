@@ -28,9 +28,11 @@ tempfile = "3.27.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [profile.release]
+opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+panic = "abort"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
