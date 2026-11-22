@@ -132,7 +132,7 @@ mod imp {
     }
 
     pub fn list(remembered: bool) -> Result<Vec<DisplayDevice>> {
-        let wmi = ::wmi::WMIConnection::with_namespace_path("root\\wmi").ok();
+        let wmi = crate::wmi::connect("root\\wmi").ok();
         let mut ids: Vec<WmiMonitorId> = wmi
             .as_ref()
             .and_then(|c| c.query::<WmiMonitorId>().ok())

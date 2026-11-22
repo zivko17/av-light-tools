@@ -431,8 +431,7 @@ mod imp {
     use crate::net::adapters::adapters;
 
     fn wmi(namespace: &str) -> Result<::wmi::WMIConnection> {
-        ::wmi::WMIConnection::with_namespace_path(namespace)
-            .map_err(|e| Error::Other(format!("WMI {namespace}: {e}")))
+        crate::wmi::connect(namespace)
     }
 
     fn query<T: serde::de::DeserializeOwned>(namespace: &str, wql: &str) -> Result<Vec<T>> {

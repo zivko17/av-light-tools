@@ -94,6 +94,9 @@ mod imp {
 
     impl ComGuard {
         fn init() -> ComGuard {
+            // Without the pin, this thread's CoUninitialize could tear down an MTA that
+            // other threads' live COM objects (WMI connections) depend on.
+            crate::com::pin_mta();
             // SAFETY: plain call; RPC_E_CHANGED_MODE (another apartment model already
             // set on this thread) is fine for Core Audio and must not be uninitialised.
             let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
