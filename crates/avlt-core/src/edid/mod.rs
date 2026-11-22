@@ -6,6 +6,7 @@ pub mod base;
 pub mod check;
 pub mod cta;
 pub mod diff;
+pub mod report;
 pub mod timing;
 
 use serde::{Serialize, Serializer};
@@ -14,6 +15,7 @@ pub use base::{BaseBlock, RangeLimits};
 pub use check::{Finding, Severity, check};
 pub use cta::{AudioDescriptor, CtaBlock, HdmiForumBlock, HdmiVsdb, Svd};
 pub use diff::{DiffKind, DiffLine, diff};
+pub use report::{Comparison, FieldRow, caps, compare, dump_file_name};
 pub use timing::DetailedTiming;
 
 /// Size of one EDID block.

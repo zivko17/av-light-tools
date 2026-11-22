@@ -15,7 +15,15 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let out = Out::new(cli.json);
     let Some(command) = cli.command else {
-        // No arguments from a terminal: show the help (double-click opening the GUI is Task 6).
+        // Double-click in Explorer: Windows made a console just for this process. Open the
+        // GUI, which drops that console (its window closes).
+        if avlt_platform::console::owns_console_alone() {
+            return match gui::run() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_) => ExitCode::FAILURE,
+            };
+        }
+        // No arguments from a terminal: show the help.
         return match Cli::command().print_help() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,

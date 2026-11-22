@@ -17,11 +17,13 @@ use std::path::Path;
 
 pub use audio::audio_devices;
 pub use battery::battery;
-pub use cleanup::{CleanupTarget, analyze as analyze_cleanup, cleanup, cleanup_targets};
+pub use cleanup::{
+    CleanupTarget, analyze as analyze_cleanup, cleanup, cleanup_cancellable, cleanup_targets,
+};
 pub use disks::{disks, fixed_volumes};
 pub use info::info;
 pub use monitors::{displays, monitors, set_mode};
-pub use processes::{TopSampler, find_processes, kill};
+pub use processes::{TopSampler, find_processes, kill, kill_all};
 pub use services::{audio_services, restart_service};
 pub use startup::startup_entries;
 pub use telemetry::TelemetrySampler;

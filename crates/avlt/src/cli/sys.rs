@@ -11,8 +11,8 @@ use avlt_core::sys::format::{
     health_level, load_level, mib, percent, process_memory_level, round_to, truncate, uptime_text,
 };
 use avlt_core::sys::model::{
-    AudioDevice, CleanStatus, Display, DisplayMode, KillReport, KillResult, ProcessInfo, Telemetry,
-    TopSample, Volume,
+    AudioDevice, CleanStatus, Display, DisplayMode, KillReport, ProcessInfo, Telemetry, TopSample,
+    Volume,
 };
 use avlt_core::sys::process::{is_protected_process, kill_plan, restrict_to_pids};
 use avlt_core::sys::{AUDIO_RESTART_SERVICE, AUDIO_SERVICES};
@@ -561,25 +561,7 @@ fn killp(args: KillpArgs, out: &Out) -> Result<()> {
     if normal > 0 {
         confirm(args.yes, &format!("Kill {normal} processes?"))?;
     }
-    for p in &skipped {
-        report.results.push(KillResult {
-            name: p.name.clone(),
-            pid: p.pid,
-            killed: false,
-            skipped: true,
-            error: None,
-        });
-    }
-    for p in &to_kill {
-        let result = psys::kill(p.pid);
-        report.results.push(KillResult {
-            name: p.name.clone(),
-            pid: p.pid,
-            killed: result.is_ok(),
-            skipped: false,
-            error: result.err().map(|e| e.to_string()),
-        });
-    }
+    report.results = psys::kill_all(&to_kill, &skipped);
     out.emit(&report, |r, out| {
         for k in &r.results {
             if k.skipped {

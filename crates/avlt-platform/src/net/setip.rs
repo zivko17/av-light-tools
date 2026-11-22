@@ -5,6 +5,8 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use avlt_core::net::model::Adapter;
+use avlt_core::net::target::IpTarget;
 use avlt_core::net::{parse_cidr, prefix_to_mask};
 
 use crate::admin::require_admin;
@@ -25,6 +27,46 @@ pub fn set_static(adapter: &str, cidr: &str, gateway: Option<&str>) -> Result<()
         &dns_dhcp_args(adapter).each_ref().map(String::as_str),
     );
     Ok(())
+}
+
+/// Applies a parsed `net setip` target to `adapter` (DHCP or static). Requires
+/// administrator rights.
+pub fn apply_ip_target(adapter: &str, target: &IpTarget) -> Result<()> {
+    match target {
+        IpTarget::Dhcp => set_dhcp(adapter),
+        IpTarget::Static {
+            address,
+            prefix,
+            gateway,
+        } => {
+            let gateway = gateway.map(|g| g.to_string());
+            set_static(adapter, &format!("{address}/{prefix}"), gateway.as_deref())
+        }
+    }
+}
+
+/// Re-reads `adapter` after a change, as SetIP.ps1: up to 8 s for a DHCP lease (until
+/// it has a non link-local address), 800 ms after a static change. `None` if it cannot
+/// be read.
+pub fn wait_for_change(adapter: &str, dhcp: bool) -> Option<Adapter> {
+    let reread = || super::find_adapter(adapter).ok();
+    if !dhcp {
+        std::thread::sleep(Duration::from_millis(800));
+        return reread();
+    }
+    let mut after = reread();
+    for _ in 0..8 {
+        if after
+            .as_ref()
+            .and_then(Adapter::primary_ipv4)
+            .is_some_and(|c| !c.address.is_link_local())
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        after = reread();
+    }
+    after
 }
 
 /// Address and DNS from DHCP on `adapter`. Requires administrator rights.

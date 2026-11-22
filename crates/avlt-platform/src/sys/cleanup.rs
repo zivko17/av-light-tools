@@ -2,6 +2,7 @@
 //! the Recycle Bin. `C:\Windows\Prefetch` is deliberately not a target.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use avlt_core::sys::fsops::{clean_dir_contents, dir_size, unsafe_cleanup_reason};
 use avlt_core::sys::model::{
@@ -82,10 +83,33 @@ pub fn analyze() -> Result<CleanupAnalysis> {
 
 /// Cleans every [`cleanup_targets`] folder and empties the Recycle Bin.
 pub fn cleanup() -> Result<CleanupReport> {
+    cleanup_cancellable(&AtomicBool::new(false))
+}
+
+/// [`cleanup`] that stops between targets once `cancel` is set (the GUI's Cancel);
+/// the Recycle Bin is then left alone. What was deleted before stays deleted.
+pub fn cleanup_cancellable(cancel: &AtomicBool) -> Result<CleanupReport> {
     if !cfg!(windows) {
         return Err(crate::Error::Unsupported);
     }
-    let mut report = clean(&cleanup_targets(), &protected_paths());
+    let protected = protected_paths();
+    let mut report = CleanupReport {
+        total_freed_bytes: 0,
+        items: Vec::new(),
+        recycle_bin: RecycleBinInfo::default(),
+        recycle_bin_emptied: false,
+    };
+    for t in cleanup_targets() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(crate::Error::Other("cancelled".into()));
+        }
+        let part = clean(std::slice::from_ref(&t), &protected);
+        report.total_freed_bytes += part.total_freed_bytes;
+        report.items.extend(part.items);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(crate::Error::Other("cancelled".into()));
+    }
     let bin = imp::recycle_bin().unwrap_or_default();
     report.recycle_bin = bin;
     // Emptying an empty bin fails; that is "already empty", not an error.

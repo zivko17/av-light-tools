@@ -208,6 +208,23 @@ pub struct IpChange {
     pub dhcp: bool,
 }
 
+impl IpChange {
+    /// What `applied` left on `adapter`, as re-read afterwards (`None`: unreadable).
+    pub fn new(
+        adapter: &str,
+        applied: crate::net::target::IpTarget,
+        after: Option<&Adapter>,
+    ) -> IpChange {
+        IpChange {
+            adapter: adapter.to_string(),
+            applied,
+            ipv4: after.map(|a| a.ipv4.clone()).unwrap_or_default(),
+            gateways: after.map(|a| a.gateways.clone()).unwrap_or_default(),
+            dhcp: after.is_some_and(|a| a.dhcp),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

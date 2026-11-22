@@ -5,14 +5,16 @@
 //! Read-only by design: nothing here writes an EDID override or touches the display
 //! driver. To force an EDID use CRU (ToastyX) or a hardware EDID emulator.
 
-use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use avlt_core::edid::{self, DiffKind, DiffLine, Edid, Finding, Severity, timing::vic_label};
-use avlt_core::media::non_colliding;
+use avlt_core::edid::{
+    self, Comparison, DiffKind, DiffLine, Edid, Finding, Severity, timing::vic_label,
+};
 use avlt_core::{Error, Result};
-use avlt_platform::edid_source::{self, DisplayDevice, EdidSource};
+use avlt_platform::edid_source::{
+    self, DisplayEntry, DumpOut, ResolvedEdid, all_displays, resolve, source_name,
+};
 use avlt_platform::paths::KnownFolder;
 use clap::{Args, Subcommand};
 use serde::Serialize;
@@ -114,71 +116,6 @@ pub fn run(cmd: EdidCmd, out: &Out) -> Result<()> {
 //  Sources
 // ------------------------------------------------------------
 
-/// A resolved EDID: where it came from and its decode.
-struct Resolved {
-    name: String,
-    /// Display number when the source is a display.
-    display: Option<usize>,
-    edid: Edid,
-}
-
-/// `"1"` (display number) or a path to a .bin file (`Resolve-EDIDSource`).
-fn resolve(source: &str, remembered: bool) -> Result<Resolved> {
-    let s = source.trim().trim_matches('"');
-    if let Ok(n) = s.parse::<usize>() {
-        let devs = edid_source::list(remembered)?;
-        let dev = devs.into_iter().find(|d| d.index == n).ok_or_else(|| {
-            Error::InvalidInput(format!(
-                "No display with index {n}. Run 'avlt edid list' to see them."
-            ))
-        })?;
-        if dev.edid.is_empty() {
-            return Err(Error::Other(format!(
-                "Display {n} reported no EDID (source: {}).",
-                source_name(dev.source)
-            )));
-        }
-        return Ok(Resolved {
-            name: format!("display {n}"),
-            display: Some(n),
-            edid: edid::decode(&dev.edid),
-        });
-    }
-    let path = Path::new(s);
-    if !path.is_file() {
-        return Err(Error::InvalidInput(format!("File not found: {s}")));
-    }
-    let bytes = std::fs::read(path)?;
-    Ok(Resolved {
-        name: path
-            .file_name()
-            .map_or_else(|| s.to_string(), |n| n.to_string_lossy().into_owned()),
-        display: None,
-        edid: edid::decode(&bytes),
-    })
-}
-
-/// Every display with an EDID, as resolved sources.
-fn all_displays(remembered: bool) -> Result<Vec<Resolved>> {
-    Ok(edid_source::list(remembered)?
-        .into_iter()
-        .filter(|d| !d.edid.is_empty())
-        .map(|d| Resolved {
-            name: format!("display {}", d.index),
-            display: Some(d.index),
-            edid: edid::decode(&d.edid),
-        })
-        .collect())
-}
-
-fn source_name(s: EdidSource) -> &'static str {
-    match s {
-        EdidSource::Registry => "registry",
-        EdidSource::Wmi => "wmi",
-        EdidSource::Unavailable => "unavailable",
-    }
-}
-
 /// A plain stdout line (text mode only; a closed pipe ends quietly).
 fn line(s: &str) {
     if let Err(e) = writeln!(io::stdout().lock(), "{s}") {
@@ -205,76 +142,8 @@ fn clip(s: &str, max: usize) -> String {
 //  edid list
 // ------------------------------------------------------------
 
-/// One row of `edid list`.
-#[derive(Debug, Serialize)]
-struct ListEntry {
-    #[serde(flatten)]
-    device: DisplayDevice,
-    manufacturer: Option<String>,
-    model: Option<String>,
-    year: Option<u16>,
-    version: Option<String>,
-    preferred: Option<String>,
-    caps: Vec<String>,
-}
-
-/// Capability shorthand that matters on site.
-fn caps(e: &Edid) -> Vec<String> {
-    let mut caps = Vec::new();
-    let Some(c) = e.first_cta() else {
-        caps.push("no CTA (DVI/VGA-style)".to_string());
-        return caps;
-    };
-    caps.push(format!("CTA{}", c.revision));
-    if let Some(r) = c.hdmi_forum.as_ref().and_then(|h| h.max_tmds_char_rate_mhz) {
-        caps.push(format!("HDMI2 {r}MHz"));
-    } else if let Some(r) = c.hdmi.as_ref().and_then(|h| h.max_tmds_mhz) {
-        caps.push(format!("HDMI {r}MHz"));
-    } else if c.hdmi.is_some() {
-        caps.push("HDMI".into());
-    }
-    if c.basic_audio {
-        caps.push("audio".into());
-    }
-    let hdr: Vec<&str> = c
-        .hdr_eotf
-        .iter()
-        .filter(|e| e.contains("PQ") || e.contains("HLG"))
-        .filter_map(|e| e.split(' ').next())
-        .collect();
-    if !hdr.is_empty() {
-        caps.push(format!("HDR {}", hdr.join("/")));
-    }
-    caps
-}
-
 fn list(a: &ListArgs, out: &Out) -> Result<()> {
-    let entries: Vec<ListEntry> = edid_source::list(a.remembered)?
-        .into_iter()
-        .map(|device| {
-            let e = (!device.edid.is_empty()).then(|| edid::decode(&device.edid));
-            let base = e.as_ref().and_then(|e| e.base.as_ref());
-            ListEntry {
-                manufacturer: base.map(|b| b.manufacturer.clone()),
-                model: base.map(|b| {
-                    b.monitor_name
-                        .clone()
-                        .unwrap_or_else(|| format!("0x{:04X}", b.product_code))
-                }),
-                year: base.map(|b| b.year),
-                version: base.map(|b| b.version.clone()),
-                preferred: base
-                    .and_then(|b| b.native.as_ref())
-                    .map(|t| t.summary.clone()),
-                caps: e
-                    .as_ref()
-                    .filter(|e| e.base.is_some())
-                    .map(caps)
-                    .unwrap_or_default(),
-                device,
-            }
-        })
-        .collect();
+    let entries: Vec<DisplayEntry> = edid_source::entries(a.remembered)?;
 
     out.emit(&entries, |entries, out| {
         out.title("=== EDID - DISPLAYS ===");
@@ -656,45 +525,10 @@ fn check(a: &CheckArgs, out: &Out) -> Result<()> {
 //  edid diff
 // ------------------------------------------------------------
 
-/// One compared field of `edid diff`.
-#[derive(Debug, Serialize)]
-struct FieldRow {
-    field: String,
-    a: String,
-    b: String,
-    same: bool,
-}
-
-/// Result of `edid diff`.
-#[derive(Debug, Serialize)]
-struct DiffOut {
-    a: String,
-    b: String,
-    a_bytes: usize,
-    b_bytes: usize,
-    fields: Vec<FieldRow>,
-    differences: Vec<DiffLine>,
-}
-
 fn diff(a: &DiffArgs, out: &Out) -> Result<()> {
     let x = resolve(&a.a, a.remembered).map_err(|e| side_error("A", e))?;
     let y = resolve(&a.b, a.remembered).map_err(|e| side_error("B", e))?;
-    let value = DiffOut {
-        fields: edid::diff::fields(&x.edid, &y.edid)
-            .into_iter()
-            .map(|(field, va, vb)| FieldRow {
-                same: va == vb,
-                field,
-                a: va,
-                b: vb,
-            })
-            .collect(),
-        differences: edid::diff(&x.edid, &y.edid),
-        a_bytes: x.edid.raw.len(),
-        b_bytes: y.edid.raw.len(),
-        a: x.name,
-        b: y.name,
-    };
+    let value = edid::compare(&x.name, &x.edid, &y.name, &y.edid);
     let all_bytes = a.bytes;
     out.emit(&value, |v, out| print_diff(v, all_bytes, out));
     Ok(())
@@ -709,7 +543,7 @@ fn side_error(side: &str, e: Error) -> Error {
     }
 }
 
-fn print_diff(v: &DiffOut, all_bytes: bool, out: &Out) {
+fn print_diff(v: &Comparison, all_bytes: bool, out: &Out) {
     out.title("=== EDID DIFF ===");
     line(&format!("  A: {}   ({} bytes)", v.a, v.a_bytes));
     line(&format!("  B: {}   ({} bytes)", v.b, v.b_bytes));
@@ -780,84 +614,13 @@ fn print_diff(v: &DiffOut, all_bytes: bool, out: &Out) {
 //  edid dump
 // ------------------------------------------------------------
 
-/// One file written (or failed) by `edid dump`.
-#[derive(Debug, Serialize)]
-struct DumpOut {
-    source: String,
-    path: Option<PathBuf>,
-    bytes: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// `<MFG>_<model>[_out<n>].bin`, with anything but word characters, `-` and `.` as `_`.
-fn dump_file_name(r: &Resolved) -> String {
-    let (mfg, model) = match &r.edid.base {
-        Some(b) => (
-            b.manufacturer.clone(),
-            b.monitor_name
-                .clone()
-                .unwrap_or_else(|| format!("{:04X}", b.product_code)),
-        ),
-        None => ("UNKNOWN".to_string(), "display".to_string()),
-    };
-    let mut safe: String = format!("{mfg}_{model}")
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    // The display index goes in the name: the same panel can appear on two outputs.
-    if let Some(n) = r.display {
-        safe.push_str(&format!("_out{n}"));
-    }
-    format!("{safe}.bin")
-}
-
-/// Writes `bytes` to `path` or the first free `_1`, `_2`, ... name; never overwrites.
-fn write_new(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
-    loop {
-        let target = non_colliding(path);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)
-        {
-            Ok(mut f) => {
-                f.write_all(bytes)?;
-                return Ok(target);
-            }
-            // Created by someone else between the check and the open: try the next name.
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e.into()),
+/// Writes every target into `dir`, warning about each failed write.
+fn write_all(targets: &[ResolvedEdid], dir: &std::path::Path, out: &Out) -> (Vec<DumpOut>, usize) {
+    let (written, failed) = edid_source::dump_all(targets, dir);
+    for w in &written {
+        if let Some(e) = &w.error {
+            out.warn(&format!("{}: {e}", w.source));
         }
-    }
-}
-
-/// Writes every target into `dir`. A failed write is reported and does not stop the rest;
-/// returns the per-file results and the number of failures.
-fn write_all(targets: &[Resolved], dir: &Path, out: &Out) -> (Vec<DumpOut>, usize) {
-    let mut written = Vec::new();
-    let mut failed = 0usize;
-    for t in targets {
-        let (path, error) = match write_new(&dir.join(dump_file_name(t)), &t.edid.raw) {
-            Ok(p) => (Some(p), None),
-            Err(e) => {
-                failed += 1;
-                out.warn(&format!("{}: {e}", t.name));
-                (None, Some(e.to_string()))
-            }
-        };
-        written.push(DumpOut {
-            source: t.name.clone(),
-            path,
-            bytes: t.edid.raw.len(),
-            error,
-        });
     }
     (written, failed)
 }
@@ -906,41 +669,6 @@ fn dump(a: &DumpArgs, out: &Out) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn resolved(bytes: &[u8], display: Option<usize>) -> Resolved {
-        Resolved {
-            name: "x".into(),
-            display,
-            edid: edid::decode(bytes),
-        }
-    }
-
-    #[test]
-    fn dump_name_without_edid_base() {
-        assert_eq!(dump_file_name(&resolved(&[], None)), "UNKNOWN_display.bin");
-        assert_eq!(
-            dump_file_name(&resolved(&[], Some(2))),
-            "UNKNOWN_display_out2.bin"
-        );
-    }
-
-    #[test]
-    fn dump_all_continues_after_a_failed_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("no_such_subdir");
-        let targets = [resolved(&[], Some(1)), resolved(&[], Some(2))];
-        let out = Out::new(true);
-
-        // Every write fails (folder missing): each entry carries an error, none abort the loop.
-        let (res, failed) = write_all(&targets, &missing, &out);
-        assert_eq!(failed, 2);
-        assert_eq!(res.len(), 2);
-        assert!(res.iter().all(|r| r.error.is_some() && r.path.is_none()));
-
-        let (res, failed) = write_all(&targets, dir.path(), &out);
-        assert_eq!(failed, 0);
-        assert!(res.iter().all(|r| r.error.is_none() && r.path.is_some()));
-    }
 
     #[test]
     fn clip_marks_cut_text() {

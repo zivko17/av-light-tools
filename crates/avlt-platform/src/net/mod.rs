@@ -5,6 +5,7 @@
 pub mod adapters;
 pub mod http;
 pub mod icmp;
+pub mod monitor;
 pub mod neighbors;
 pub mod setip;
 #[cfg(windows)]
@@ -24,8 +25,11 @@ use crate::{Error, Result};
 pub use adapters::{active_adapters, adapters, default_adapter, find_adapter, setip_adapter};
 pub use http::{public_ip, vendor_online};
 pub use icmp::{ping, sweep};
+pub use monitor::{TrafficMeter, latency_ms, ping_round, ping_targets};
 pub use neighbors::{hostname, neighbors};
-pub use setip::{flush_dns, restart_adapter, set_dhcp, set_static};
+pub use setip::{
+    apply_ip_target, flush_dns, restart_adapter, set_dhcp, set_static, wait_for_change,
+};
 pub use tcp::{port_scan, tcp_open};
 pub use traffic::{connections, traffic};
 
@@ -37,6 +41,27 @@ pub const SCAN_CONCURRENCY: usize = 64;
 pub const HOSTNAME_TIMEOUT: Duration = Duration::from_millis(700);
 /// TCP connect timeout of `net portcheck` / `net portscan`.
 pub const TCP_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// winget package of the Ookla Speedtest CLI.
+pub const SPEEDTEST_WINGET: &str = "Ookla.Speedtest.CLI";
+
+/// Runs the Ookla Speedtest CLI (about 30 s) and returns its JSON result. Killed as
+/// soon as `cancel` is set.
+pub fn speedtest(cancel: &std::sync::atomic::AtomicBool) -> Result<serde_json::Value> {
+    let exe = crate::process::find_tool("speedtest", SPEEDTEST_WINGET)?;
+    let (code, text) = crate::process::output_cancellable(
+        &exe,
+        &["--accept-license", "--accept-gdpr", "--format=json"],
+        cancel,
+    )?;
+    if code != 0 {
+        return Err(Error::Other(format!(
+            "speedtest failed with exit code {code}: {}",
+            text.trim()
+        )));
+    }
+    avlt_core::net::format::parse_speedtest(&text)
+}
 
 /// IPv4 address of `host`: a literal, or the first IPv4 its name resolves to.
 pub fn resolve_ipv4(host: &str) -> Result<Ipv4Addr> {

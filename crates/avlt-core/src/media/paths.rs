@@ -1,6 +1,10 @@
 //! Output paths that never overwrite an existing file.
 
+use std::fs::OpenOptions;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+use crate::Result;
 
 /// `path` if nothing exists there, otherwise the first free `stem_1.ext`, `stem_2.ext`, ...
 ///
@@ -22,6 +26,27 @@ pub fn non_colliding(path: &Path) -> PathBuf {
         })
         .find(|p| !p.exists())
         .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Writes `bytes` to `path` or the first free `_1`, `_2`, ... name; never overwrites.
+/// Returns the path written.
+pub fn write_new(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    loop {
+        let target = non_colliding(path);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(mut f) => {
+                f.write_all(bytes)?;
+                return Ok(target);
+            }
+            // Created by someone else between the check and the open: try the next name.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -68,5 +93,16 @@ mod tests {
             non_colliding(&sub.join("vídeo.bin")),
             sub.join("vídeo_1.bin")
         );
+    }
+
+    #[test]
+    fn write_new_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("é d.bin");
+        assert_eq!(write_new(&p, b"a").unwrap(), p);
+        let second = write_new(&p, b"b").unwrap();
+        assert_eq!(second, dir.path().join("é d_1.bin"));
+        assert_eq!(std::fs::read(&p).unwrap(), b"a");
+        assert_eq!(std::fs::read(&second).unwrap(), b"b");
     }
 }
