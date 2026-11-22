@@ -67,7 +67,11 @@ fn json_flag_is_global() {
         let o = avlt(&args);
         // Accepted in both positions: the command runs and fails on the missing file.
         assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
-        assert!(stderr(&o).contains("File not found"), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("File not found"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
     }
 }
 
