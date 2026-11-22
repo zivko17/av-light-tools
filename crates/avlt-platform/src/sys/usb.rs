@@ -92,9 +92,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn lists_usb_devices() {
-        // Any PC has at least a USB root hub.
+        // CI virtual machines may have no USB controller at all: only check the filter.
         let list = usb_devices().unwrap();
-        assert!(!list.is_empty());
         assert!(
             list.iter()
                 .all(|d| d.instance_id.to_uppercase().starts_with("USB"))
