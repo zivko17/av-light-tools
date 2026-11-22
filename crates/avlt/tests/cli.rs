@@ -17,26 +17,8 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-const GROUPS: [(&str, &[&str]); 7] = [
-    (
-        "calc",
-        &[
-            "subnet",
-            "screen",
-            "ledwall",
-            "bitrate",
-            "avoip",
-            "projector",
-            "pixelpitch",
-            "brightness",
-            "viewangle",
-            "camera",
-            "audiobw",
-            "speaker",
-            "cable",
-            "dsp",
-        ],
-    ),
+/// Groups whose subcommands are still stubs (`calc` is implemented; see `cli_calc.rs`).
+const GROUPS: [(&str, &[&str]); 6] = [
     ("edid", &["list", "info", "check", "diff", "dump"]),
     (
         "net",
@@ -130,8 +112,8 @@ fn every_subcommand_exists_and_is_a_stub() {
 }
 
 #[test]
-fn calc_subnet_with_args_is_not_implemented() {
-    let o = avlt(&["calc", "subnet", "1.2.3.4/24"]);
+fn ndi_check_with_args_is_not_implemented() {
+    let o = avlt(&["ndi", "check", "1.2.3.4/24"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains("not implemented"), "{}", stderr(&o));
     assert!(stdout(&o).is_empty(), "{}", stdout(&o));
@@ -140,8 +122,8 @@ fn calc_subnet_with_args_is_not_implemented() {
 #[test]
 fn json_flag_is_global() {
     for args in [
-        ["--json", "calc", "subnet", "1.2.3.4/24"],
-        ["calc", "subnet", "1.2.3.4/24", "--json"],
+        ["--json", "ndi", "check", "1.2.3.4/24"],
+        ["ndi", "check", "1.2.3.4/24", "--json"],
     ] {
         let o = avlt(&args);
         assert_eq!(o.status.code(), Some(1), "{args:?}: {}", stderr(&o));
@@ -165,7 +147,7 @@ fn unknown_subcommand_is_usage_error() {
 
 #[test]
 fn piped_output_has_no_colour_and_json_stdout_stays_clean() {
-    let o = avlt(&["--json", "calc", "subnet", "1.2.3.4/24"]);
+    let o = avlt(&["--json", "ndi", "check", "1.2.3.4/24"]);
     assert!(!stderr(&o).contains('\x1b'), "{:?}", stderr(&o));
     assert!(stderr(&o).starts_with("error: "), "{:?}", stderr(&o));
     assert!(stdout(&o).is_empty(), "{:?}", stdout(&o));
