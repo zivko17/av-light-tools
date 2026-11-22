@@ -4,6 +4,7 @@
 //! Plain `std::fs`: testable on any platform in a temporary folder.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -110,6 +111,20 @@ pub fn dir_size(dir: &Path) -> (u64, u64) {
 /// (`C:\Temp` is the shortest allowed), and any path equal to or containing one of
 /// `protected` (the user profile, the Windows folder). Case-insensitive.
 pub fn unsafe_cleanup_reason(target: &Path, protected: &[PathBuf]) -> Option<String> {
+    if let Some(reason) = lexical_reason(target, protected) {
+        return Some(reason);
+    }
+    // Links and junctions must not smuggle a protected folder in: judge the real path.
+    if fs::symlink_metadata(target).is_ok() {
+        return match fs::canonicalize(target) {
+            Ok(real) => lexical_reason(&strip_verbatim(real), protected),
+            Err(e) => Some(format!("cannot resolve the real path ({e})")),
+        };
+    }
+    None
+}
+
+fn lexical_reason(target: &Path, protected: &[PathBuf]) -> Option<String> {
     if target.as_os_str().is_empty() || !target.is_absolute() {
         return Some("not an absolute path".into());
     }
@@ -120,13 +135,29 @@ pub fn unsafe_cleanup_reason(target: &Path, protected: &[PathBuf]) -> Option<Str
         return Some("too close to the drive root".into());
     }
     for p in protected {
-        if let Some(prot) = normalized(p)
-            && prot.starts_with(&parts)
-        {
-            return Some(format!("is or contains {}", p.display()));
+        let real = fs::canonicalize(p).map(strip_verbatim).ok();
+        for candidate in std::iter::once(p).chain(real.as_ref()) {
+            if let Some(prot) = normalized(candidate)
+                && prot.starts_with(&parts)
+            {
+                return Some(format!("is or contains {}", p.display()));
+            }
         }
     }
     None
+}
+
+/// Drops the verbatim prefix `canonicalize` adds on Windows (`\\?\C:\x` -> `C:\x`,
+/// `\\?\UNC\s\x` -> `\\s\x`).
+fn strip_verbatim(p: PathBuf) -> PathBuf {
+    let text = p.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p
+    }
 }
 
 /// Lower-cased path components (`None` if the path has `..`).
@@ -182,12 +213,20 @@ pub fn backup(source: &Path, dest_root: &Path, stamp: &str) -> Result<BackupRepo
     // List everything first so a destination inside the source is never copied into itself.
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
     if is_file {
         let name = source.file_name().map(PathBuf::from).unwrap_or_default();
         files.push((source.to_path_buf(), name));
     } else {
         let skip = inner_dir(source, dest_root);
-        collect_tree(source, source, skip.as_deref(), &mut dirs, &mut files);
+        collect_tree(
+            source,
+            source,
+            skip.as_deref(),
+            &mut dirs,
+            &mut files,
+            &mut failed,
+        );
     }
 
     fs::create_dir_all(&destination)?;
@@ -197,7 +236,7 @@ pub fn backup(source: &Path, dest_root: &Path, stamp: &str) -> Result<BackupRepo
         is_file,
         files: 0,
         bytes: 0,
-        failed: Vec::new(),
+        failed,
     };
     for rel in dirs {
         if let Err(e) = fs::create_dir_all(destination.join(&rel)) {
@@ -245,31 +284,78 @@ fn inner_dir(source: &Path, dest_root: &Path) -> Option<PathBuf> {
     dst.starts_with(&src).then_some(dst)
 }
 
+/// What a directory entry is, as far as a backup cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Dir,
+    File,
+    /// Symlink or junction: never followed, never copied.
+    Link,
+    Other,
+}
+
+/// Entries of a folder (path and kind), or why it cannot be listed.
+type DirReader<'a> = dyn Fn(&Path) -> io::Result<Vec<(PathBuf, Kind)>> + 'a;
+
+fn read_entries(dir: &Path) -> io::Result<Vec<(PathBuf, Kind)>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir)?.flatten() {
+        let kind = match entry.file_type() {
+            Ok(t) if t.is_symlink() => Kind::Link,
+            Ok(t) if t.is_dir() => Kind::Dir,
+            Ok(t) if t.is_file() => Kind::File,
+            _ => Kind::Other,
+        };
+        out.push((entry.path(), kind));
+    }
+    Ok(out)
+}
+
+/// Lists the tree under `dir`. Folders that cannot be read and links that are not
+/// followed are recorded in `failed`, so a backup never looks complete when it is not.
 fn collect_tree(
     root: &Path,
     dir: &Path,
     skip: Option<&Path>,
     dirs: &mut Vec<PathBuf>,
     files: &mut Vec<(PathBuf, PathBuf)>,
+    failed: &mut Vec<String>,
 ) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    collect_tree_with(&read_entries, root, dir, skip, dirs, files, failed);
+}
+
+fn collect_tree_with(
+    read: &DirReader<'_>,
+    root: &Path,
+    dir: &Path,
+    skip: Option<&Path>,
+    dirs: &mut Vec<PathBuf>,
+    files: &mut Vec<(PathBuf, PathBuf)>,
+    failed: &mut Vec<String>,
+) {
+    let entries = match read(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            let shown = dir.strip_prefix(root).unwrap_or(dir);
+            failed.push(format!("{}: cannot read folder: {e}", shown.display()));
+            return;
+        }
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for (path, kind) in entries {
         let Ok(rel) = path.strip_prefix(root).map(Path::to_path_buf) else {
             continue;
         };
-        match entry.file_type() {
-            Ok(t) if t.is_dir() => {
+        match kind {
+            Kind::Dir => {
                 if skip.is_some_and(|s| fs::canonicalize(&path).is_ok_and(|c| c == s)) {
                     continue;
                 }
                 dirs.push(rel);
-                collect_tree(root, &path, skip, dirs, files);
+                collect_tree_with(read, root, &path, skip, dirs, files, failed);
             }
-            Ok(t) if t.is_file() => files.push((path, rel)),
-            _ => {}
+            Kind::File => files.push((path, rel)),
+            Kind::Link => failed.push(format!("{}: symlink/junction not copied", rel.display())),
+            Kind::Other => {}
         }
     }
 }
@@ -508,6 +594,128 @@ mod tests {
         ] {
             assert!(check(bad).is_some(), "{bad} accepted");
         }
+    }
+
+    #[test]
+    fn collect_tree_records_unreadable_folders_and_links() {
+        let root = Path::new("root");
+        let bad = root.join("locked");
+        let reader = |d: &Path| -> io::Result<Vec<(PathBuf, Kind)>> {
+            if d == root {
+                Ok(vec![
+                    (root.join("a.txt"), Kind::File),
+                    (bad.clone(), Kind::Dir),
+                    (root.join("ln"), Kind::Link),
+                ])
+            } else {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+            }
+        };
+        let (mut dirs, mut files, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+        collect_tree_with(
+            &reader,
+            root,
+            root,
+            None,
+            &mut dirs,
+            &mut files,
+            &mut failed,
+        );
+        assert_eq!(files.len(), 1);
+        assert_eq!(dirs, vec![PathBuf::from("locked")]);
+        assert_eq!(failed.len(), 2, "{failed:?}");
+        assert!(
+            failed
+                .iter()
+                .any(|f| f.starts_with("locked: cannot read folder"))
+        );
+        assert!(failed.contains(&"ln: symlink/junction not copied".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_reports_an_unreadable_subfolder() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        write(&src.join("ok.txt"), 3);
+        write(&src.join("locked/secret.txt"), 3);
+        let locked = src.join("locked");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        // Root can read anything: then there is nothing to fail.
+        let readable = fs::read_dir(&locked).is_ok();
+        let report = backup(&src, &tmp.path().join("dest"), "t").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        if !readable {
+            assert_eq!(report.files, 1);
+            assert!(
+                report
+                    .failed
+                    .iter()
+                    .any(|f| f.starts_with("locked: cannot read folder")),
+                "{:?}",
+                report.failed
+            );
+        }
+    }
+
+    /// Creates `target` (a folder) and a symlink (Unix) or junction (Windows) `link` to
+    /// it. `None` when the platform refuses (the calling test is then skipped).
+    fn make_dir_link(target: &Path, link: &Path) -> Option<()> {
+        fs::create_dir_all(target).ok()?;
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).ok()
+        }
+        #[cfg(windows)]
+        {
+            let ok = std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .ok()?
+                .status
+                .success();
+            ok.then_some(())
+        }
+    }
+
+    #[test]
+    fn backup_lists_links_as_not_copied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        write(&src.join("ok.txt"), 3);
+        if make_dir_link(&tmp.path().join("elsewhere"), &src.join("jn")).is_none() {
+            return;
+        }
+        let report = backup(&src, &tmp.path().join("dest"), "t").unwrap();
+        assert_eq!(report.files, 1);
+        assert_eq!(report.failed.len(), 1, "{:?}", report.failed);
+        assert!(report.failed[0].contains("symlink/junction not copied"));
+        assert!(!report.destination.join("jn").exists());
+    }
+
+    #[test]
+    fn cleanup_refuses_a_link_to_a_protected_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let protected = tmp.path().join("profile");
+        let link = tmp.path().join("looks").join("harmless");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        if make_dir_link(&protected, &link).is_none() {
+            return;
+        }
+        let reason = unsafe_cleanup_reason(&link, std::slice::from_ref(&protected));
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|r| r.contains("is or contains")),
+            "{reason:?}"
+        );
+        // An unrelated real folder stays allowed.
+        let other = tmp.path().join("other").join("cache");
+        fs::create_dir_all(&other).unwrap();
+        assert_eq!(unsafe_cleanup_reason(&other, &[protected]), None);
     }
 
     #[test]

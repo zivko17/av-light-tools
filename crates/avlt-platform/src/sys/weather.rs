@@ -24,9 +24,7 @@ fn clean_body(body: &str) -> String {
 }
 
 fn fetch(url: &str, timeout: Duration) -> Result<String> {
-    match crate::net::http::get_text_with_agent(url, timeout, USER_AGENT)
-        .map(|b| clean_body(&b))
-    {
+    match crate::net::http::get_text_with_agent(url, timeout, USER_AGENT).map(|b| clean_body(&b)) {
         Err(Error::Other(e)) => Err(Error::Other(format!(
             "could not fetch weather ({e}). Check internet connection."
         ))),
@@ -40,11 +38,16 @@ mod tests {
 
     #[test]
     fn body_keeps_leading_whitespace_and_drops_trailing() {
-        assert_eq!(clean_body("  
+        assert_eq!(
+            clean_body(
+                "  
    Paris: +9C
 
- "), "  
-   Paris: +9C");
+ "
+            ),
+            "  
+   Paris: +9C"
+        );
         assert_eq!(clean_body(""), "");
     }
 
