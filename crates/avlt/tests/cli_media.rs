@@ -1,5 +1,7 @@
 //! `avlt media`: missing-tool behaviour, argument errors and real conversions on small
 //! generated files (skipped when ffmpeg is not installed).
+// Test-only helpers outside #[test] fns are not covered by clippy.toml's test allowance.
+#![allow(clippy::unwrap_used)]
 
 use std::path::Path;
 use std::process::{Command, Output};

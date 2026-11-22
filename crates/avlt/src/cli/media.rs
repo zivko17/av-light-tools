@@ -142,6 +142,9 @@ pub fn run(cmd: MediaCmd, out: &Out) -> Result<()> {
 /// Outcome of the ffmpeg run(s) for one file: exit code and the program's text.
 type Run = (i32, String);
 
+/// Runs ffmpeg for `(ffmpeg, input, output, out)`.
+type RunFn<'a> = dyn Fn(&Path, &Path, &Path, &Out) -> Result<Run> + 'a;
+
 /// What one `media` operation does with each input file.
 struct Batch<'a> {
     /// Operation name for the report and heading.
@@ -151,7 +154,7 @@ struct Batch<'a> {
     /// Bare output file name for an input.
     name_for: Box<dyn Fn(&Path) -> PathBuf + 'a>,
     /// Runs ffmpeg for `(ffmpeg, input, output)`.
-    run: Box<dyn Fn(&Path, &Path, &Path, &Out) -> Result<Run> + 'a>,
+    run: Box<RunFn<'a>>,
 }
 
 fn convert(a: &ConvertArgs, out: &Out) -> Result<()> {
