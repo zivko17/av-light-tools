@@ -162,3 +162,11 @@ fn unknown_subcommand_is_usage_error() {
     let o = avlt(&["frobnicate"]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
 }
+
+#[test]
+fn piped_output_has_no_colour_and_json_stdout_stays_clean() {
+    let o = avlt(&["--json", "calc", "subnet", "1.2.3.4/24"]);
+    assert!(!stderr(&o).contains('\x1b'), "{:?}", stderr(&o));
+    assert!(stderr(&o).starts_with("error: "), "{:?}", stderr(&o));
+    assert!(stdout(&o).is_empty(), "{:?}", stdout(&o));
+}

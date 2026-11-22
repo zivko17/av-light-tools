@@ -18,6 +18,7 @@ fn main() -> ExitCode {
         // No arguments from a terminal: show the help (double-click opening the GUI is Task 6).
         return match Cli::command().print_help() {
             Ok(()) => ExitCode::SUCCESS,
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
             Err(_) => ExitCode::FAILURE,
         };
     };
