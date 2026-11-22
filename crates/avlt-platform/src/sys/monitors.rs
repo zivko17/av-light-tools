@@ -503,7 +503,7 @@ mod tests {
             height: 7,
             refresh_hz: 3,
         };
-        let err = set_mode(&d.device_name, bogus, false).unwrap_err();
+        let err = set_mode(&d.device_name, bogus, true).unwrap_err();
         assert_eq!(err.exit_code(), 2, "{err}");
         let err = set_mode(r"\\.\DISPLAY999", bogus, true).unwrap_err();
         assert_eq!(err.exit_code(), 2, "{err}");
