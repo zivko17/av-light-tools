@@ -38,7 +38,8 @@ const GROUPS: [(&str, &[&str]); 7] = [
         ],
     ),
     ("edid", &["list", "info", "check", "diff", "dump"]),
-    ("net", &["flushdns", "reset-nic", "setip"]),
+    // Task 3 implemented every net subcommand; see tests/cli_net.rs.
+    ("net", &[]),
     (
         "sys",
         &[

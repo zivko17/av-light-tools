@@ -1,7 +1,7 @@
 //! `avlt net ...`: Network tools (NetTools.ps1, MyIP.ps1, SetIP.ps1, NetMaint).
 
 use std::future::Future;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -14,11 +14,12 @@ use avlt_core::net::format::{
     latency_bars, latency_class, link_class, traffic_rate,
 };
 use avlt_core::net::model::{
-    Adapter, LatencySample, MyIp, PingHost, PingRound, PortCheck, PortScan, SpeedSample,
+    Adapter, IpChange, LatencySample, MyIp, PingHost, PingRound, PortCheck, PortScan, SpeedSample,
     VendorSource,
 };
-use avlt_core::net::target::parse_scan_target;
+use avlt_core::net::target::{IpTarget, parse_ip_target, parse_scan_target};
 use avlt_core::{Error, Result};
+use avlt_platform::admin::require_admin;
 use avlt_platform::net::{self as pnet, PING_TIMEOUT};
 use avlt_platform::process::{self, find_tool};
 use clap::{Args, Subcommand};
@@ -26,7 +27,6 @@ use serde::Serialize;
 use tokio::time::MissedTickBehavior;
 
 use super::output::{Out, exit_if_broken_pipe};
-use super::{Pending, not_implemented};
 
 /// `avlt net` subcommands.
 #[derive(Debug, Subcommand)]
@@ -54,11 +54,11 @@ pub enum NetCmd {
     /// Internet speed test (Ookla Speedtest CLI)
     Speedtest,
     /// Flush the DNS cache
-    Flushdns(Pending),
-    /// Restart a network adapter
-    ResetNic(Pending),
-    /// Set a static IP, a profile or DHCP
-    Setip(Pending),
+    Flushdns,
+    /// Restart a network adapter (administrator)
+    ResetNic(ResetNicArgs),
+    /// Set a static IP, a profile or DHCP (administrator)
+    Setip(SetipArgs),
 }
 
 /// Optional adapter name.
@@ -140,6 +140,32 @@ pub struct SpeedArgs {
     pub count: CountArg,
 }
 
+/// `net setip` arguments (SetIP.ps1).
+#[derive(Debug, Args)]
+pub struct SetipArgs {
+    /// Profile name from avlt.toml (default profiles: 0 = 192.168.0.99/24,
+    /// 1 = 192.168.1.99/24), dhcp, or IP/prefix such as 192.168.1.25/24
+    pub target: String,
+    /// Default gateway for IP/prefix
+    pub gateway: Option<String>,
+    /// Adapter to change (default: avlt.toml `iface`, then the adapter of the default route)
+    #[arg(long)]
+    pub iface: Option<String>,
+    /// Do not ask for confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+/// `net reset-nic` arguments.
+#[derive(Debug, Args)]
+pub struct ResetNicArgs {
+    /// Adapter name (default: avlt.toml `iface`, then the adapter of the default route)
+    pub iface: Option<String>,
+    /// Do not ask for confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
 /// Runs an `avlt net` subcommand.
 pub fn run(cmd: NetCmd, out: &Out) -> Result<()> {
     match cmd {
@@ -154,9 +180,9 @@ pub fn run(cmd: NetCmd, out: &Out) -> Result<()> {
         NetCmd::Speed(a) => speed(a, out),
         NetCmd::Connections => connections(out),
         NetCmd::Speedtest => speedtest(out),
-        NetCmd::Flushdns(_) => not_implemented(),
-        NetCmd::ResetNic(_) => not_implemented(),
-        NetCmd::Setip(_) => not_implemented(),
+        NetCmd::Flushdns => flushdns(out),
+        NetCmd::ResetNic(a) => reset_nic(a, out),
+        NetCmd::Setip(a) => setip(a, out),
     }
 }
 
@@ -900,4 +926,180 @@ fn speedtest(out: &Out) -> Result<()> {
         .map_err(|e| Error::Other(format!("speedtest returned invalid JSON: {e}")))?;
     out.emit(&value, |_, _| {});
     Ok(())
+}
+
+// ---------------------------------------------------------------- system changes
+
+/// Asks `question` on stderr unless `yes`; refuses without a terminal to ask on.
+fn confirm(yes: bool, question: &str) -> Result<()> {
+    let stdin = io::stdin();
+    let interactive = stdin.is_terminal();
+    confirm_with(yes, interactive, stdin.lock(), question)
+}
+
+fn confirm_with(yes: bool, interactive: bool, reader: impl BufRead, question: &str) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+    if !interactive {
+        return Err(Error::InvalidInput(format!(
+            "{question} needs confirmation: run it in a terminal or pass --yes"
+        )));
+    }
+    let mut err = io::stderr().lock();
+    let _ = write!(err, "{question} [y/N] ");
+    let _ = err.flush();
+    if answered_yes(reader) {
+        Ok(())
+    } else {
+        Err(Error::Other("cancelled".into()))
+    }
+}
+
+fn answered_yes(mut reader: impl BufRead) -> bool {
+    let mut answer = String::new();
+    reader.read_line(&mut answer).is_ok()
+        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// SetIP.ps1 (whole script) / NetMaint IpConfigPage: profile, DHCP or custom address.
+///
+/// Order: validate the target, require administrator, resolve the adapter, confirm, apply.
+fn setip(args: SetipArgs, out: &Out) -> Result<()> {
+    let cfg = config()?;
+    let target = parse_ip_target(&args.target, args.gateway.as_deref(), &cfg.ip_profiles)?;
+    require_admin()?;
+    let adapter = pnet::default_adapter(args.iface.as_deref().or(cfg.iface.as_deref()))?;
+    let name = adapter.name;
+    confirm(args.yes, &format!("Set {target} on '{name}'?"))?;
+    match target {
+        IpTarget::Dhcp => pnet::set_dhcp(&name)?,
+        IpTarget::Static {
+            address,
+            prefix,
+            gateway,
+        } => {
+            let gateway = gateway.map(|g| g.to_string());
+            pnet::set_static(&name, &format!("{address}/{prefix}"), gateway.as_deref())?;
+        }
+    }
+    out.ok(&format!("OK -> {target}"));
+    // As SetIP.ps1: wait up to 8 s for a DHCP lease, 800 ms after a static change.
+    let after = if target == IpTarget::Dhcp {
+        let mut after = pnet::find_adapter(&name)?;
+        for _ in 0..8 {
+            if after
+                .primary_ipv4()
+                .is_some_and(|c| !c.address.is_link_local())
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+            after = pnet::find_adapter(&name)?;
+        }
+        after
+    } else {
+        std::thread::sleep(Duration::from_millis(800));
+        pnet::find_adapter(&name)?
+    };
+    let result = IpChange {
+        adapter: name,
+        applied: target,
+        ipv4: after.ipv4,
+        gateways: after.gateways,
+        dhcp: after.dhcp,
+    };
+    out.emit(&result, |r, out| {
+        if r.ipv4.is_empty() {
+            line(
+                out,
+                &paint(
+                    out,
+                    Colour::Dim,
+                    "  (No IP yet, wait and run: avlt net info)",
+                ),
+            );
+        }
+        for c in &r.ipv4 {
+            out.field("IP", &format!("{}/{}", c.address, c.prefix));
+        }
+        if !r.gateways.is_empty() {
+            out.field("Gateway", &join(&r.gateways));
+        }
+    });
+    Ok(())
+}
+
+/// NetTools.ps1 `reset-nic` (lines 94-107): disable, wait 2 s, enable.
+fn reset_nic(args: ResetNicArgs, out: &Out) -> Result<()> {
+    require_admin()?;
+    let adapter = resolve_adapter(args.iface.as_deref())?;
+    confirm(
+        args.yes,
+        &format!(
+            "Restart adapter '{}'? Its connections drop for a few seconds.",
+            adapter.name
+        ),
+    )?;
+    if !out.json {
+        out.title(&format!("Restarting adapter '{}'...", adapter.name));
+    }
+    pnet::restart_adapter(&adapter.name)?;
+    out.emit(
+        &serde_json::json!({ "adapter": adapter.name, "restarted": true }),
+        |_, out| out.ok("OK -> adapter restarted"),
+    );
+    Ok(())
+}
+
+/// NetTools.ps1 `flushdns` (lines 87-92) / NetMaint `Native.FlushDns`.
+fn flushdns(out: &Out) -> Result<()> {
+    pnet::flush_dns()?;
+    out.emit(&serde_json::json!({ "flushed": true }), |_, out| {
+        out.ok("OK -> DNS cache cleared")
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirmation_answers() {
+        for (input, expected) in [
+            ("y\n", true),
+            ("YES\r\n", true),
+            (" y ", true),
+            ("n\n", false),
+            ("\n", false),
+            ("", false),
+            ("yep\n", false),
+        ] {
+            assert_eq!(answered_yes(input.as_bytes()), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn confirmation_paths() {
+        assert!(confirm_with(true, false, "".as_bytes(), "Q?").is_ok());
+        let err = confirm_with(false, false, "y\n".as_bytes(), "Q?").unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
+        assert!(err.to_string().contains("--yes"), "{err}");
+        assert!(confirm_with(false, true, "y\n".as_bytes(), "Q?").is_ok());
+        let err = confirm_with(false, true, "n\n".as_bytes(), "Q?").unwrap_err();
+        assert_eq!(err.to_string(), "cancelled");
+    }
+
+    #[test]
+    fn host_lists_split_and_dedupe() {
+        let args: Vec<String> = ["192.168.1.1,192.168.1.10", " 8.8.8.8 ", "192.168.1.1,,"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            split_hosts(&args),
+            ["192.168.1.1", "192.168.1.10", "8.8.8.8"]
+        );
+    }
 }

@@ -198,6 +198,16 @@ pub struct SpeedSample {
     pub total_up_bytes: u64,
 }
 
+/// Result of `net setip`: what was applied and the adapter's addresses afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IpChange {
+    pub adapter: String,
+    pub applied: crate::net::target::IpTarget,
+    pub ipv4: Vec<Ipv4Cidr>,
+    pub gateways: Vec<Ipv4Addr>,
+    pub dhcp: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

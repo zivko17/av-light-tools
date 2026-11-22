@@ -114,7 +114,7 @@ pub fn parse_ip_target(
     if !target.contains('/') {
         let names: Vec<&str> = profiles.keys().map(String::as_str).collect();
         return Err(setip_error(format!(
-            "invalid input '{target}' (profiles: {}; or dhcp, or ip/prefix)",
+            "unknown target '{target}' (profiles: {}; or dhcp, or ip/prefix)",
             names.join(", ")
         )));
     }

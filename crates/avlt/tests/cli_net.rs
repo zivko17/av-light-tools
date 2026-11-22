@@ -249,3 +249,78 @@ fn speedtest_without_cli_suggests_winget() {
         stderr(&o)
     );
 }
+
+/// Exit code expected when a system-changing command passes validation: 4 without
+/// elevation; elevated, the bogus adapter name is a usage error (2); 5 off Windows.
+fn refusal_code() -> i32 {
+    if !cfg!(windows) {
+        5
+    } else if avlt_platform::admin::is_admin() {
+        2
+    } else {
+        4
+    }
+}
+
+#[test]
+fn setip_rejects_bad_targets_with_usage() {
+    for args in [
+        &["bogus"][..],
+        &["192.168.1.25"],
+        &["192.168.1.25/33"],
+        &["192.168.1.25/24", "192.168.1.300"],
+        &["dhcp", "192.168.1.1"],
+    ] {
+        let mut full = vec!["net", "setip"];
+        full.extend_from_slice(args);
+        full.extend_from_slice(&["--iface", "avlt-test-no-such-adapter"]);
+        let o = avlt(&full);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(stderr(&o).contains("usage:"), "{args:?}: {}", stderr(&o));
+        assert!(stdout(&o).is_empty(), "{}", stdout(&o));
+    }
+}
+
+#[test]
+fn setip_and_reset_nic_never_reach_netsh_in_tests() {
+    for args in [
+        &[
+            "setip",
+            "10.0.0.5/24",
+            "--iface",
+            "avlt-test-no-such-adapter",
+        ][..],
+        &["setip", "0", "--iface", "avlt-test-no-such-adapter"],
+        &[
+            "setip",
+            "dhcp",
+            "--iface",
+            "avlt-test-no-such-adapter",
+            "--yes",
+        ],
+        &["reset-nic", "avlt-test-no-such-adapter"],
+        &["reset-nic", "avlt-test-no-such-adapter", "--yes"],
+    ] {
+        let mut full = vec!["net"];
+        full.extend_from_slice(args);
+        let o = avlt(&full);
+        assert_eq!(
+            o.status.code(),
+            Some(refusal_code()),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+        assert!(!stdout(&o).contains("OK"), "{}", stdout(&o));
+        if refusal_code() == 4 {
+            assert!(stderr(&o).contains("administrator"), "{}", stderr(&o));
+        }
+    }
+}
+
+#[test]
+fn flushdns_is_wired_up() {
+    // Not executed: it changes system state. Only the command surface is checked.
+    let o = avlt(&["net", "flushdns", "--help"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("DNS"), "{}", stdout(&o));
+}
