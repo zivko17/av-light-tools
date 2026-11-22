@@ -94,7 +94,13 @@ pub struct Runner {
     rt: Option<tokio::runtime::Runtime>,
     handle: tokio::runtime::Handle,
     repaint: Repaint,
+    /// Cancel flags of every job started, for [`Runner::cancel_all`] at exit.
+    flags: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>>,
 }
+
+/// How long closing the window waits for cancelled jobs to stop (and kill their
+/// external programs) before the runtime is abandoned.
+pub const EXIT_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 
 impl Runner {
     pub fn new(repaint: Repaint) -> Result<Runner> {
@@ -107,12 +113,17 @@ impl Runner {
             handle: rt.handle().clone(),
             rt: Some(rt),
             repaint,
+            flags: std::sync::Mutex::new(Vec::new()),
         })
     }
 
     fn channel<M>(&self) -> (Sender<M>, mpsc::Receiver<M>, Arc<AtomicBool>) {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
+        if let Ok(mut flags) = self.flags.lock() {
+            flags.retain(|w| w.strong_count() > 0);
+            flags.push(Arc::downgrade(&cancel));
+        }
         let sender = Sender {
             tx,
             repaint: self.repaint.clone(),
@@ -165,11 +176,26 @@ impl Runner {
     }
 }
 
+impl Runner {
+    /// Sets the cancel flag of every job still alive (blocking jobs see it and stop,
+    /// killing ffmpeg / speedtest).
+    pub fn cancel_all(&self) {
+        if let Ok(flags) = self.flags.lock() {
+            for f in flags.iter().filter_map(std::sync::Weak::upgrade) {
+                f.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 impl Drop for Runner {
     fn drop(&mut self) {
-        // Blocking calls still running (slow WMI, ffmpeg) must not delay closing the window.
+        // Cancel everything, give the jobs [`EXIT_GRACE`] to stop, then abandon what is
+        // left (a slow WMI call must not delay closing the window). External programs
+        // die with avlt anyway (kill-on-close job objects in avlt-platform).
+        self.cancel_all();
         if let Some(rt) = self.rt.take() {
-            rt.shutdown_background();
+            rt.shutdown_timeout(EXIT_GRACE);
         }
     }
 }
@@ -420,6 +446,30 @@ pub(crate) mod tests {
         assert!(stopped.load(Ordering::Relaxed), "job saw the cancel flag");
         task.poll();
         assert_eq!(task.status, Status::Idle, "late result is ignored");
+    }
+
+    #[test]
+    fn dropping_the_runner_cancels_running_jobs() {
+        let rt = runner();
+        let saw_cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&saw_cancel);
+        let started = Arc::new(AtomicBool::new(false));
+        let s = Arc::clone(&started);
+        let job = rt.spawn_blocking(move |tx: Sender<()>| {
+            s.store(true, Ordering::Relaxed);
+            while !tx.cancelled() {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            flag.store(true, Ordering::Relaxed);
+        });
+        while !started.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let t = Instant::now();
+        drop(rt);
+        assert!(t.elapsed() < Duration::from_secs(2), "exit wait is bounded");
+        assert!(saw_cancel.load(Ordering::Relaxed), "the job saw the cancel");
+        drop(job);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Running ffmpeg / ffprobe for the `media` operations (shared by the CLI and the GUI).
 
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use avlt_core::media::{self, JobResult, MediaOp, ProbeInfo, failure_reason, non_colliding};
 
@@ -71,7 +71,11 @@ pub fn run_job(
             failed(failure_reason(code, &text))
         }
         Err(e) => {
-            discard_empty_partial(&target, existed, "");
+            if cancel.load(Ordering::Relaxed) {
+                discard_cancelled_output(&target, existed);
+            } else {
+                discard_empty_partial(&target, existed, "");
+            }
             failed(e.to_string())
         }
     }
@@ -84,6 +88,14 @@ pub fn discard_empty_partial(target: &Path, existed: bool, text: &str) {
         return;
     }
     if std::fs::metadata(target).is_ok_and(|m| m.len() == 0) {
+        let _ = std::fs::remove_file(target);
+    }
+}
+
+/// Removes what a cancelled (killed) ffmpeg left at `target`, whatever its size, unless
+/// the file existed before the run.
+pub fn discard_cancelled_output(target: &Path, existed: bool) {
+    if !existed && target.is_file() {
         let _ = std::fs::remove_file(target);
     }
 }
@@ -126,6 +138,18 @@ mod tests {
         std::fs::write(&full, b"data").unwrap();
         discard_empty_partial(&full, false, "boom");
         assert!(full.exists());
+    }
+
+    #[test]
+    fn cancelled_output_is_removed_unless_it_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let partial = dir.path().join("half done.mp3");
+        std::fs::write(&partial, b"truncated data").unwrap();
+        discard_cancelled_output(&partial, true);
+        assert!(partial.exists(), "a file that existed before stays");
+        discard_cancelled_output(&partial, false);
+        assert!(!partial.exists(), "our truncated output goes");
+        discard_cancelled_output(&partial, false);
     }
 
     #[test]

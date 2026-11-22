@@ -175,9 +175,13 @@ impl MediaPage {
         }));
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
+    /// Advances the batch / probe jobs (called each frame by the app).
+    pub fn poll(&mut self) {
         self.batch.poll();
         self.probe.poll();
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
         if let Some(p) = cx.dropped.first() {
             self.input = p.display().to_string();
         }

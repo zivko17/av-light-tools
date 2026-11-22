@@ -15,10 +15,9 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let out = Out::new(cli.json);
     let Some(command) = cli.command else {
-        // Double-click in Explorer: Windows made a console just for this process. Drop it
-        // (its window closes) and open the GUI.
+        // Double-click in Explorer: Windows made a console just for this process. Open the
+        // GUI, which drops that console (its window closes).
         if avlt_platform::console::owns_console_alone() {
-            avlt_platform::console::detach_console();
             return match gui::run() {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(_) => ExitCode::FAILURE,

@@ -27,18 +27,41 @@ pub fn relaunch_elevated(args: &[&str]) -> Result<()> {
     imp::run_as(&exe, &command_line(args))
 }
 
-/// Joins arguments into one Windows command line, quoting those with spaces or quotes.
+/// Joins arguments into one Windows command line that `CommandLineToArgvW` / the MSVC
+/// runtime split back into the same arguments: arguments with spaces, tabs or quotes
+/// (or empty ones) are quoted, `"` becomes `\"`, and backslashes are doubled only where
+/// they precede a quote (including the closing one).
 pub fn command_line(args: &[&str]) -> String {
     args.iter()
-        .map(|a| {
-            if a.is_empty() || a.contains([' ', '\t', '"']) {
-                format!("\"{}\"", a.replace('"', "\\\""))
-            } else {
-                (*a).to_string()
-            }
-        })
+        .map(|a| quote_arg(a))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn quote_arg(a: &str) -> String {
+    if !a.is_empty() && !a.contains([' ', '\t', '"']) {
+        return a.to_string();
+    }
+    let mut out = String::from('"');
+    let mut backslashes = 0usize;
+    for c in a.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                out.push(c);
+                backslashes = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
 }
 
 #[cfg(windows)]
@@ -133,6 +156,10 @@ mod tests {
         assert_eq!(command_line(&["a b", "c"]), "\"a b\" c");
         assert_eq!(command_line(&["say \"hi\""]), "\"say \\\"hi\\\"\"");
         assert_eq!(command_line(&[""]), "\"\"");
+        // Backslashes only double before a quote (MSVC rules).
+        assert_eq!(command_line(&[r"C:\My Dir\"]), r#""C:\My Dir\\""#);
+        assert_eq!(command_line(&[r"a\b c"]), r#""a\b c""#);
+        assert_eq!(command_line(&[r#"x\"y z"#]), r#""x\\\"y z""#);
     }
 
     #[test]

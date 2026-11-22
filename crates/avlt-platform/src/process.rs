@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -57,8 +57,30 @@ pub fn output(exe: &Path, args: &[&str]) -> Result<(i32, String)> {
     Ok((out.status.code().unwrap_or(-1), text))
 }
 
+/// A child process tied to a Windows Job Object with `KILL_ON_JOB_CLOSE`: when this
+/// value is dropped, or when avlt exits by any path (window closed, Ctrl+C, crash), the
+/// job handle closes and Windows kills the child. Elsewhere it is a plain child.
+pub struct KillableChild {
+    pub child: Child,
+    _job: imp::Job,
+}
+
+impl KillableChild {
+    /// Spawns `cmd` and puts the new process in its own kill-on-close job.
+    pub fn spawn(cmd: &mut Command) -> Result<KillableChild> {
+        let child = cmd.spawn()?;
+        let job = imp::Job::for_child(&child);
+        Ok(KillableChild { child, _job: job })
+    }
+
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+}
+
 /// [`output`] that kills the program as soon as `cancel` is set (the GUI's Cancel), then
-/// fails with `Error::Other("cancelled")`.
+/// fails with `Error::Other("cancelled")`. The program also dies with avlt
+/// ([`KillableChild`]), so closing the window never leaves ffmpeg / speedtest running.
 pub fn output_cancellable(exe: &Path, args: &[&str], cancel: &AtomicBool) -> Result<(i32, String)> {
     let mut cmd = Command::new(exe);
     cmd.args(args)
@@ -66,7 +88,8 @@ pub fn output_cancellable(exe: &Path, args: &[&str], cancel: &AtomicBool) -> Res
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     hide_window(&mut cmd);
-    let mut child = cmd.spawn()?;
+    let mut killable = KillableChild::spawn(&mut cmd)?;
+    let child = &mut killable.child;
     // Both pipes are drained on their own threads so a chatty program never blocks.
     let read = |pipe: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
@@ -134,6 +157,78 @@ fn hidden_output(exe: &Path, args: &[&str]) -> Result<std::process::Output> {
         .stderr(Stdio::piped());
     hide_window(&mut cmd);
     Ok(cmd.output()?)
+}
+
+#[cfg(windows)]
+mod imp {
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+    use windows::core::PCWSTR;
+
+    /// An owned job handle (`None` if the job could not be set up: the child then just
+    /// runs unconfined, as before).
+    pub struct Job(Option<HANDLE>);
+
+    impl Job {
+        pub fn for_child(child: &Child) -> Job {
+            // SAFETY: no security attributes and no name; the returned handle is owned
+            // by `Job` and closed exactly once in `Drop`.
+            let Ok(job) = (unsafe { CreateJobObjectW(None, PCWSTR::null()) }) else {
+                return Job(None);
+            };
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: `info` is a JOBOBJECT_EXTENDED_LIMIT_INFORMATION of the size passed;
+            // the child's handle is valid while `child` is alive (it is, we borrow it).
+            let ok = unsafe {
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const info).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+                .is_ok()
+                    && AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())).is_ok()
+            };
+            if ok {
+                Job(Some(job))
+            } else {
+                // SAFETY: `job` was created above and is not used afterwards.
+                let _ = unsafe { CloseHandle(job) };
+                Job(None)
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            if let Some(h) = self.0.take() {
+                // SAFETY: owned handle, closed once; closing it kills the job's processes.
+                let _ = unsafe { CloseHandle(h) };
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod imp {
+    use std::process::Child;
+
+    /// No job objects outside Windows.
+    pub struct Job;
+
+    impl Job {
+        pub fn for_child(_child: &Child) -> Job {
+            Job
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -205,6 +300,35 @@ mod tests {
         let stop = AtomicBool::new(true);
         let err = output_cancellable(&shell(), &[SHELL.1, "echo x"], &stop).unwrap_err();
         assert_eq!(err.to_string(), "cancelled");
+    }
+
+    #[cfg(windows)]
+    fn process_exists(pid: u32) -> bool {
+        let out = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_killable_child_dies_when_dropped() {
+        let ping = find_tool("ping", "none").unwrap();
+        let mut cmd = Command::new(ping);
+        cmd.args(["-n", "30", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = KillableChild::spawn(&mut cmd).unwrap();
+        let pid = child.id();
+        assert!(process_exists(pid), "ping {pid} should be running");
+        drop(child);
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        while process_exists(pid) && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!process_exists(pid), "ping {pid} survived its job handle");
     }
 
     #[test]

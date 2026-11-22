@@ -71,6 +71,8 @@ pub struct NetPage {
     pub flush: Task<()>,
     pub confirm: Confirm<NetAction>,
     pub form_error: Option<String>,
+    /// avlt.toml IP profile names, read once (and again on Apply).
+    profiles: Option<Vec<String>>,
     started: bool,
 }
 
@@ -104,6 +106,7 @@ impl Default for NetPage {
             flush: Task::default(),
             confirm: Confirm::default(),
             form_error: None,
+            profiles: None,
             started: false,
         }
     }
@@ -124,7 +127,8 @@ pub fn default_scan_target(ip: Ipv4Addr) -> String {
 }
 
 impl NetPage {
-    fn poll(&mut self) {
+    /// Advances every job of the section (called each frame by the app).
+    pub fn poll(&mut self) {
         let was_loading = self.info.is_running();
         self.info.poll();
         if was_loading
@@ -271,6 +275,7 @@ impl NetPage {
     /// Validates the IP form and asks for confirmation (the change itself runs on yes).
     pub fn request_setip(&mut self) {
         self.form_error = None;
+        self.profiles = None;
         let r = (|| {
             let cfg = env::load_config()?;
             let gateway = Some(self.ip_gateway.trim()).filter(|g| !g.is_empty());
@@ -330,7 +335,6 @@ impl NetPage {
             self.started = true;
             self.load_info(cx);
         }
-        self.poll();
         if let Some(action) = self.confirm.show(ui.ctx()) {
             self.run_action(action, cx);
         }
@@ -495,11 +499,14 @@ impl NetPage {
             }
         });
         if let Some(c) = self.portcheck.done() {
-            if c.open {
-                widgets::ok(ui, &format!("OPEN ({} {} responds)", c.ip, c.port));
-            } else {
-                widgets::error(ui, &format!("CLOSED / no response ({} {})", c.ip, c.port));
-            }
+            ui.horizontal(|ui| {
+                if c.open {
+                    widgets::ok(ui, &format!("OPEN ({} {} responds)", c.ip, c.port));
+                } else {
+                    widgets::error(ui, &format!("CLOSED / no response ({} {})", c.ip, c.port));
+                }
+                widgets::copy_buttons(ui, &to_value(c));
+            });
         }
         if let Some(p) = self.portscan.done() {
             widgets::result_view(ui, "net-ports", p);
@@ -725,9 +732,14 @@ impl NetPage {
     }
 
     fn ip_tab(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
-        let profiles: Vec<String> = env::load_config()
-            .map(|c| c.ip_profiles.keys().cloned().collect())
-            .unwrap_or_default();
+        let profiles = self
+            .profiles
+            .get_or_insert_with(|| {
+                env::load_config()
+                    .map(|c| c.ip_profiles.keys().cloned().collect())
+                    .unwrap_or_default()
+            })
+            .clone();
         theme::section(ui, "Set IP (SetIP)");
         egui::Grid::new("setip").num_columns(2).show(ui, |ui| {
             ui.label("Target");
@@ -774,7 +786,11 @@ impl NetPage {
                 self.request_reset();
             }
             if let Some(a) = self.reset.done() {
-                widgets::ok(ui, &format!("OK -> '{a}' restarted"));
+                ui.horizontal(|ui| {
+                    widgets::ok(ui, &format!("OK -> '{a}' restarted"));
+                    let v = serde_json::json!({ "adapter": a, "restarted": true });
+                    widgets::copy_buttons(ui, &v);
+                });
             }
         }
         ui.separator();

@@ -143,7 +143,18 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Stop every job before the runner goes (it waits briefly for them on drop).
+        self.runner.cancel_all();
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Every section's jobs advance each frame, whichever section is shown.
+        self.edid.poll();
+        self.net.poll();
+        self.sys.poll();
+        self.media.poll();
+        self.ndi.poll();
         let dropped: Vec<PathBuf> = ui.ctx().input(|i| {
             i.raw
                 .dropped_files
@@ -177,7 +188,14 @@ impl eframe::App for App {
 }
 
 /// Opens the main window and runs until it closes.
+///
+/// A process that owns its console alone (double-click, or the elevated relaunch that
+/// ShellExecute "runas" starts with a fresh console) detaches from it first, so no stray
+/// console window stays open (closing it would kill the GUI).
 pub fn run() -> Result<()> {
+    if avlt_platform::console::owns_console_alone() {
+        avlt_platform::console::detach_console();
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("avlt")

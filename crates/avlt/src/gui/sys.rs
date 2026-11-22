@@ -176,7 +176,8 @@ fn report_index(r: Report) -> usize {
 }
 
 impl SysPage {
-    fn poll(&mut self) {
+    /// Advances every job of the section (called each frame by the app).
+    pub fn poll(&mut self) {
         for r in &mut self.reports {
             r.poll();
         }
@@ -254,7 +255,6 @@ impl SysPage {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
-        self.poll();
         if let Some(a) = self.confirm.show(ui.ctx()) {
             self.run_action(a, cx);
         }
@@ -485,6 +485,7 @@ impl SysPage {
 
     fn kill_results(&self, ui: &mut Ui) {
         if let Some(results) = self.killed.done() {
+            ui.horizontal(|ui| widgets::copy_buttons(ui, &to_value(results)));
             for k in results {
                 match &k.error {
                     None if k.killed => {
@@ -620,6 +621,7 @@ impl SysPage {
             widgets::error(ui, e);
         }
         if let Some(c) = self.mode_change.done() {
+            ui.horizontal(|ui| widgets::copy_buttons(ui, &to_value(c)));
             if c.test_only {
                 widgets::ok(
                     ui,
@@ -669,7 +671,10 @@ impl SysPage {
                 );
             }
             if let Some(s) = self.restart.done() {
-                widgets::ok(ui, &format!("{} restarted: {}", s.name, s.status));
+                ui.horizontal(|ui| {
+                    widgets::ok(ui, &format!("{} restarted: {}", s.name, s.status));
+                    widgets::copy_buttons(ui, &to_value(s));
+                });
             }
         }
     }

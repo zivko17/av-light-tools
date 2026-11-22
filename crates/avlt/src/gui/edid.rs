@@ -130,8 +130,12 @@ impl EdidPage {
         self.dumped = Some(r);
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
+    /// Advances the display-list job (called each frame by the app).
+    pub fn poll(&mut self) {
         self.displays.poll();
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
         if !self.loaded_once {
             self.refresh(cx);
         }
@@ -371,17 +375,22 @@ impl EdidPage {
             {
                 self.dump(&[r]);
             }
-            let all: Vec<ResolvedEdid> = self
+            let any = self
                 .displays
                 .done()
-                .into_iter()
-                .flatten()
-                .filter_map(|d| edid_source::from_device(d.device.clone()).ok())
-                .collect();
+                .is_some_and(|l| l.iter().any(|d| !d.device.edid.is_empty()));
             if ui
-                .add_enabled(!all.is_empty(), egui::Button::new("Save every display"))
+                .add_enabled(any, egui::Button::new("Save every display"))
                 .clicked()
             {
+                // Decoded only on click, not every frame.
+                let all: Vec<ResolvedEdid> = self
+                    .displays
+                    .done()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|d| edid_source::from_device(d.device.clone()).ok())
+                    .collect();
                 self.dump(&all);
             }
         });

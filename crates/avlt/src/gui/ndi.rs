@@ -51,10 +51,14 @@ impl NdiPage {
         );
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
+    /// Advances every job of the section (called each frame by the app).
+    pub fn poll(&mut self) {
         self.check.poll();
         self.services.poll();
         self.config.poll();
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui, cx: &mut Cx<'_>) {
         theme::heading(ui, "NDI");
         tabs(
             ui,
