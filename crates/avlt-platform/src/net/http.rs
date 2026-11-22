@@ -4,9 +4,18 @@ use std::time::Duration;
 
 use crate::Result;
 
+/// User-Agent of avlt's own requests.
+pub const USER_AGENT: &str = concat!("avlt/", env!("CARGO_PKG_VERSION"));
+
 /// Body of `GET url`, trimmed. Non-2xx answers and timeouts are errors.
 pub fn get_text(url: &str, timeout: Duration) -> Result<String> {
-    imp::get_text(url, timeout)
+    get_text_with_agent(url, timeout, USER_AGENT)
+}
+
+/// [`get_text`] with a custom User-Agent (wttr.in only sends plain text to console
+/// clients it recognises by User-Agent).
+pub fn get_text_with_agent(url: &str, timeout: Duration, user_agent: &str) -> Result<String> {
+    imp::get_text(url, timeout, user_agent)
 }
 
 /// Public IPv4 address from api.ipify.org (MyIP.ps1), `None` without internet.
@@ -33,7 +42,7 @@ mod imp {
 
     use crate::{Error, Result};
 
-    pub fn get_text(url: &str, timeout: Duration) -> Result<String> {
+    pub fn get_text(url: &str, timeout: Duration, user_agent: &str) -> Result<String> {
         // rustls is not compiled in: native-tls (SChannel) must be selected explicitly,
         // with the Windows certificate store as roots.
         let tls = TlsConfig::builder()
@@ -44,7 +53,7 @@ mod imp {
             ureq::Agent::config_builder()
                 .tls_config(tls)
                 .timeout_global(Some(timeout))
-                .user_agent(concat!("avlt/", env!("CARGO_PKG_VERSION")))
+                .user_agent(user_agent)
                 .build(),
         );
         let fail = |e: ureq::Error| Error::Other(format!("GET {url}: {e}"));
@@ -60,7 +69,7 @@ mod imp {
 
     use crate::{Error, Result};
 
-    pub fn get_text(_url: &str, _timeout: Duration) -> Result<String> {
+    pub fn get_text(_url: &str, _timeout: Duration, _user_agent: &str) -> Result<String> {
         Err(Error::Unsupported)
     }
 }
