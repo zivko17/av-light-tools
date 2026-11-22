@@ -105,6 +105,46 @@ pub fn dir_size(dir: &Path) -> (u64, u64) {
     (bytes, files)
 }
 
+/// Why `target` must not be emptied by `sys cleanup`, or `None` when it is safe:
+/// relative paths and `..`, drive / share roots, paths with fewer than 3 components
+/// (`C:\Temp` is the shortest allowed), and any path equal to or containing one of
+/// `protected` (the user profile, the Windows folder). Case-insensitive.
+pub fn unsafe_cleanup_reason(target: &Path, protected: &[PathBuf]) -> Option<String> {
+    if target.as_os_str().is_empty() || !target.is_absolute() {
+        return Some("not an absolute path".into());
+    }
+    let Some(parts) = normalized(target) else {
+        return Some("contains '..'".into());
+    };
+    if parts.len() < 3 {
+        return Some("too close to the drive root".into());
+    }
+    for p in protected {
+        if let Some(prot) = normalized(p)
+            && prot.starts_with(&parts)
+        {
+            return Some(format!("is or contains {}", p.display()));
+        }
+    }
+    None
+}
+
+/// Lower-cased path components (`None` if the path has `..`).
+fn normalized(p: &Path) -> Option<Vec<String>> {
+    use std::path::Component;
+    let mut out = Vec::new();
+    for c in p.components() {
+        match c {
+            Component::Prefix(x) => out.push(x.as_os_str().to_string_lossy().to_lowercase()),
+            Component::RootDir => out.push(std::path::MAIN_SEPARATOR.to_string()),
+            Component::Normal(s) => out.push(s.to_string_lossy().to_lowercase()),
+            Component::CurDir => {}
+            Component::ParentDir => return None,
+        }
+    }
+    Some(out)
+}
+
 /// Backup folder name of Backup.ps1 / MaintenancePage: `<name>_backup_<stamp>`, where
 /// `stamp` is the local time as `yyyy-MM-dd_HH-mm`.
 pub fn backup_name(source_name: &str, stamp: &str) -> String {
@@ -413,6 +453,61 @@ mod tests {
         assert_eq!(stats.failed_files, 1);
         assert!(locked.is_file(), "locked file must survive");
         assert!(!dir.join("free.tmp").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unsafe_cleanup_targets_windows() {
+        let protected = [
+            PathBuf::from(r"C:\Users\andre"),
+            PathBuf::from(r"C:\Windows"),
+        ];
+        let check = |p: &str| unsafe_cleanup_reason(Path::new(p), &protected);
+        for ok in [
+            r"C:\Users\andre\AppData\Local\Temp",
+            r"C:\Windows\Temp",
+            r"c:\windows\temp\",
+            r"C:\Temp",
+            r"D:\cache\x",
+        ] {
+            assert_eq!(check(ok), None, "{ok}");
+        }
+        for bad in [
+            r"C:\",
+            r"D:\",
+            "C:",
+            r"\\server\share\",
+            r"C:\Users",
+            r"C:\Users\andre",
+            r"c:\USERS\ANDRE\",
+            r"C:\Windows",
+            r"C:\WINDOWS\",
+            r"C:\Windows\Temp\..",
+            r"Temp",
+            "",
+        ] {
+            assert!(check(bad).is_some(), "{bad} accepted");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_cleanup_targets_unix() {
+        let protected = [PathBuf::from("/home/andre")];
+        let check = |p: &str| unsafe_cleanup_reason(Path::new(p), &protected);
+        assert_eq!(check("/tmp/cache"), None);
+        assert_eq!(check("/home/andre/.cache"), None);
+        for bad in [
+            "/",
+            "/tmp",
+            "/home",
+            "/home/andre",
+            "/home/andre/",
+            "tmp/x",
+            "/tmp/x/..",
+        ] {
+            assert!(check(bad).is_some(), "{bad} accepted");
+        }
     }
 
     #[test]

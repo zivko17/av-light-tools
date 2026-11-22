@@ -3,9 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
-use avlt_core::sys::fsops::{clean_dir_contents, dir_size};
+use avlt_core::sys::fsops::{clean_dir_contents, dir_size, unsafe_cleanup_reason};
 use avlt_core::sys::model::{
-    CleanupAnalysis, CleanupItem, CleanupReport, CleanupTargetSize, RecycleBinInfo,
+    CleanStats, CleanStatus, CleanupAnalysis, CleanupItem, CleanupReport, CleanupTargetSize,
+    RecycleBinInfo,
 };
 
 use crate::Result;
@@ -37,6 +38,16 @@ pub fn cleanup_targets() -> Vec<CleanupTarget> {
         ));
     }
     targets
+}
+
+/// Folders no cleanup target may be or contain: the user profile and the Windows folder.
+pub fn protected_paths() -> Vec<PathBuf> {
+    ["USERPROFILE", "SystemRoot", "HOME"]
+        .iter()
+        .filter_map(std::env::var_os)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn target(name: &str, path: PathBuf) -> CleanupTarget {
@@ -74,7 +85,7 @@ pub fn cleanup() -> Result<CleanupReport> {
     if !cfg!(windows) {
         return Err(crate::Error::Unsupported);
     }
-    let mut report = clean(&cleanup_targets());
+    let mut report = clean(&cleanup_targets(), &protected_paths());
     let bin = imp::recycle_bin().unwrap_or_default();
     report.recycle_bin = bin;
     // Emptying an empty bin fails; that is "already empty", not an error.
@@ -87,16 +98,28 @@ pub fn cleanup() -> Result<CleanupReport> {
 
 /// Empties each target folder (the folder itself stays). Pure file-system work, also
 /// used by tests on temporary folders.
-pub fn clean(targets: &[CleanupTarget]) -> CleanupReport {
+/// Targets that fail [`unsafe_cleanup_reason`] against `protected` are reported as
+/// [`CleanStatus::Unsafe`] and left untouched.
+pub fn clean(targets: &[CleanupTarget], protected: &[PathBuf]) -> CleanupReport {
     let items: Vec<CleanupItem> = targets
         .iter()
         .map(|t| {
+            if let Some(reason) = unsafe_cleanup_reason(&t.path, protected) {
+                return CleanupItem {
+                    name: t.name.clone(),
+                    path: t.path.clone(),
+                    status: CleanStatus::Unsafe,
+                    stats: CleanStats::default(),
+                    skipped_reason: Some(format!("unsafe target: {reason}")),
+                };
+            }
             let stats = clean_dir_contents(Path::new(&t.path));
             CleanupItem {
                 name: t.name.clone(),
                 path: t.path.clone(),
                 status: stats.status(),
                 stats,
+                skipped_reason: None,
             }
         })
         .collect();
@@ -164,8 +187,6 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use avlt_core::sys::model::CleanStatus;
-
     use super::*;
 
     #[test]
@@ -196,7 +217,7 @@ mod tests {
             target("Empty", empty),
             target("Missing", tmp.path().join("missing")),
         ];
-        let report = clean(&targets);
+        let report = clean(&targets, &[]);
         assert_eq!(report.total_freed_bytes, 1000);
         assert_eq!(report.items[0].status, CleanStatus::Freed);
         assert_eq!(report.items[0].stats.freed_bytes, 1000);
@@ -205,6 +226,57 @@ mod tests {
         assert!(!report.items[2].stats.existed);
         assert!(full.is_dir());
         assert!(!report.recycle_bin_emptied);
+    }
+
+    /// A target that is (or contains) a protected folder, or too short, is never touched.
+    #[test]
+    fn unsafe_targets_are_skipped_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("profile");
+        let inside = home.join("Temp");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::write(home.join("precious.doc"), b"keep").unwrap();
+        std::fs::write(inside.join("junk.tmp"), b"junk").unwrap();
+        let root = tmp.path().ancestors().last().unwrap().to_path_buf();
+        let targets = [
+            target("Ancestor", tmp.path().to_path_buf()),
+            target("Profile", home.clone()),
+            target("Root", root),
+            target("Relative", PathBuf::from("Temp")),
+            target("Inside", inside.clone()),
+        ];
+        let report = clean(&targets, std::slice::from_ref(&home));
+        let status: Vec<CleanStatus> = report.items.iter().map(|i| i.status).collect();
+        assert_eq!(
+            status,
+            [
+                CleanStatus::Unsafe,
+                CleanStatus::Unsafe,
+                CleanStatus::Unsafe,
+                CleanStatus::Unsafe,
+                CleanStatus::Freed
+            ]
+        );
+        assert!(report.items[0].skipped_reason.is_some());
+        assert!(
+            home.join("precious.doc").is_file(),
+            "protected file deleted"
+        );
+        assert!(!inside.join("junk.tmp").exists());
+        assert_eq!(report.total_freed_bytes, 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_targets_pass_the_safety_check() {
+        let protected = protected_paths();
+        for t in cleanup_targets() {
+            assert_eq!(
+                avlt_core::sys::fsops::unsafe_cleanup_reason(&t.path, &protected),
+                None,
+                "{t:?}"
+            );
+        }
     }
 
     #[cfg(windows)]
