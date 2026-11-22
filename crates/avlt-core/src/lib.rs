@@ -8,3 +8,5 @@ pub mod error;
 pub mod media;
 pub mod net;
 pub mod sys;
+
+pub use error::{Error, Result};
