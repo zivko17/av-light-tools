@@ -277,7 +277,7 @@ Input #0, wav, from 'in file.wav':
 
     #[test]
     fn probe_reads_container_and_first_audio_stream() {
-        let p = parse_probe("C:\\música\\a b.mp3", PROBE_JSON).unwrap();
+        let p = parse_probe("música/a b.mp3", PROBE_JSON).unwrap();
         assert_eq!(p.file, "a b.mp3");
         assert_eq!(p.container.as_deref(), Some("mp3"));
         assert_eq!(p.duration_s, Some(61.25));
