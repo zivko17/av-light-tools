@@ -86,7 +86,11 @@ pub struct DumpArgs {
     #[arg(default_value = "1", conflicts_with = "all")]
     pub source: String,
     /// Output folder (default: <output dir>/EDID)
+    #[arg(conflicts_with = "out")]
     pub dir: Option<PathBuf>,
+    /// Output folder; also works with --all (same as the positional folder)
+    #[arg(long, short = 'o', value_name = "DIR")]
+    pub out: Option<PathBuf>,
     /// Dump every display that has an EDID
     #[arg(long)]
     pub all: bool,
@@ -864,7 +868,7 @@ fn dump(a: &DumpArgs, out: &Out) -> Result<()> {
     } else {
         vec![resolve(&a.source, a.remembered)?]
     };
-    let dir = match &a.dir {
+    let dir = match a.out.as_ref().or(a.dir.as_ref()) {
         Some(d) => d.clone(),
         None => env::output_dir(KnownFolder::Documents)?.join("EDID"),
     };

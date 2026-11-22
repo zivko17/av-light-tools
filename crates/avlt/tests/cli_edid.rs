@@ -217,3 +217,40 @@ fn dump_all_with_a_source_is_a_usage_error() {
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert!(stderr(&o).contains("cannot be used with"), "{}", stderr(&o));
 }
+
+#[test]
+fn dump_all_accepts_out_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let o = avlt(&["edid", "dump", "--all", "--out", s(tmp.path())]);
+    // Exit code depends on display access, but it must not be a usage error.
+    assert_ne!(o.status.code(), Some(2), "{}", stderr(&o));
+}
+
+#[test]
+fn dump_out_flag_writes_to_folder_with_spaces_and_accent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out_dir = tmp.path().join("salida con espacios é");
+    let o = avlt(&[
+        "edid",
+        "dump",
+        s(&fixture("synthetic_base.bin")),
+        "-o",
+        s(&out_dir),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(out_dir.join("DEL_DELL_TEST.bin").is_file());
+}
+
+#[test]
+fn dump_positional_dir_and_out_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let o = avlt(&[
+        "edid",
+        "dump",
+        s(&fixture("synthetic_base.bin")),
+        s(tmp.path()),
+        "--out",
+        s(tmp.path()),
+    ]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+}
