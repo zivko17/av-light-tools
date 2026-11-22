@@ -252,7 +252,9 @@ mod tests {
         assert!(!report.recycle_bin_emptied);
     }
 
-    /// A target that is (or contains) a protected folder, or too short, is never touched.
+    /// A target that is (or contains) a protected folder is never touched. Every path
+    /// handed to `clean()` lives in a tempdir; root / relative / too-short paths are
+    /// covered by the pure `unsafe_cleanup_reason` tests (fsops.rs), never by deleting.
     #[test]
     fn unsafe_targets_are_skipped_untouched() {
         let tmp = tempfile::tempdir().unwrap();
@@ -261,25 +263,16 @@ mod tests {
         std::fs::create_dir_all(&inside).unwrap();
         std::fs::write(home.join("precious.doc"), b"keep").unwrap();
         std::fs::write(inside.join("junk.tmp"), b"junk").unwrap();
-        let root = tmp.path().ancestors().last().unwrap().to_path_buf();
         let targets = [
             target("Ancestor", tmp.path().to_path_buf()),
             target("Profile", home.clone()),
-            target("Root", root),
-            target("Relative", PathBuf::from("Temp")),
             target("Inside", inside.clone()),
         ];
         let report = clean(&targets, std::slice::from_ref(&home));
         let status: Vec<CleanStatus> = report.items.iter().map(|i| i.status).collect();
         assert_eq!(
             status,
-            [
-                CleanStatus::Unsafe,
-                CleanStatus::Unsafe,
-                CleanStatus::Unsafe,
-                CleanStatus::Unsafe,
-                CleanStatus::Freed
-            ]
+            [CleanStatus::Unsafe, CleanStatus::Unsafe, CleanStatus::Freed]
         );
         assert!(report.items[0].skipped_reason.is_some());
         assert!(
