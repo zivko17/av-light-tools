@@ -19,7 +19,10 @@ pub fn fetch_weather(url: &str) -> Result<String> {
 }
 
 fn fetch(url: &str, timeout: Duration) -> Result<String> {
-    match crate::net::http::get_text_with_agent(url, timeout, USER_AGENT) {
+    // trim_end only: the report's leading spaces are part of the layout.
+    match crate::net::http::get_text_with_agent(url, timeout, USER_AGENT)
+        .map(|b| b.trim_end().to_string())
+    {
         Err(Error::Other(e)) => Err(Error::Other(format!(
             "could not fetch weather ({e}). Check internet connection."
         ))),

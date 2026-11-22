@@ -9,11 +9,12 @@ pub const USER_AGENT: &str = concat!("avlt/", env!("CARGO_PKG_VERSION"));
 
 /// Body of `GET url`, trimmed. Non-2xx answers and timeouts are errors.
 pub fn get_text(url: &str, timeout: Duration) -> Result<String> {
-    get_text_with_agent(url, timeout, USER_AGENT)
+    get_text_with_agent(url, timeout, USER_AGENT).map(|b| b.trim().to_string())
 }
 
-/// [`get_text`] with a custom User-Agent (wttr.in only sends plain text to console
-/// clients it recognises by User-Agent).
+/// Body of `GET url` exactly as received (not trimmed: leading spaces of text art
+/// matter), with a custom User-Agent (wttr.in only sends plain text to console clients
+/// it recognises by User-Agent). Non-2xx answers and timeouts are errors.
 pub fn get_text_with_agent(url: &str, timeout: Duration, user_agent: &str) -> Result<String> {
     imp::get_text(url, timeout, user_agent)
 }
@@ -59,7 +60,7 @@ mod imp {
         let fail = |e: ureq::Error| Error::Other(format!("GET {url}: {e}"));
         let mut resp = agent.get(url).call().map_err(fail)?;
         let body = resp.body_mut().read_to_string().map_err(fail)?;
-        Ok(body.trim().to_string())
+        Ok(body)
     }
 }
 
