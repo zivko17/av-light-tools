@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 avlt-core.workspace = true
 serde.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 sysinfo.workspace = true
 
 [target.'cfg(windows)'.dependencies]
