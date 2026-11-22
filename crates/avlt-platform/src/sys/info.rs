@@ -21,13 +21,24 @@ fn is_real_gpu(name: &str) -> bool {
     !lower.contains("basic") && !lower.contains("remote")
 }
 
-/// SysInfo.ps1: the registry size at the GPU's index when positive, else `AdapterRAM`.
+/// VRAM of the GPU `name` at position `index`: the registry size of the adapter key whose
+/// `DriverDesc` is `name`; else SysInfo.ps1's rule (the positive registry size at the
+/// GPU's index, which mismatches on hybrid iGPU + dGPU PCs); else `AdapterRAM`.
+/// `registry` holds `(DriverDesc, qwMemorySize)` in key order.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn vram_for(index: usize, registry_sizes: &[u64], adapter_ram: Option<u64>) -> Option<u64> {
-    registry_sizes
-        .get(index)
-        .copied()
-        .filter(|&s| s > 0)
+fn vram_for(
+    index: usize,
+    name: &str,
+    registry: &[(String, u64)],
+    adapter_ram: Option<u64>,
+) -> Option<u64> {
+    let by_name = registry
+        .iter()
+        .find(|(desc, size)| *size > 0 && desc.trim().eq_ignore_ascii_case(name.trim()))
+        .map(|(_, size)| *size);
+    let sizes: Vec<u64> = registry.iter().map(|r| r.1).filter(|&s| s > 0).collect();
+    by_name
+        .or_else(|| sizes.get(index).copied())
         .or(adapter_ram.filter(|&r| r > 0))
 }
 
@@ -38,7 +49,7 @@ mod imp {
 
     use super::{DISPLAY_CLASS_KEY, is_real_gpu, vram_for};
     use crate::Result;
-    use crate::registry::{Hive, number, subkeys};
+    use crate::registry::{Hive, number, subkeys, values};
     use crate::sys::disks::fixed_volumes;
     use crate::wmi::{cim_date, cim_datetime, connect, query};
 
@@ -106,9 +117,9 @@ mod imp {
             .unwrap_or_default()
     }
 
-    /// `HardwareInformation.qwMemorySize` of each `0*` adapter subkey, in key order,
-    /// keeping only positive sizes (SysInfo.ps1 `$gpuRegMem`).
-    fn registry_vram() -> Vec<u64> {
+    /// `(DriverDesc, HardwareInformation.qwMemorySize)` of each `0*` adapter subkey that
+    /// has a size, in key order (SysInfo.ps1 `$gpuRegMem`, plus the adapter name).
+    fn registry_vram() -> Vec<(String, u64)> {
         let Ok(Some(mut keys)) = subkeys(Hive::LocalMachine, DISPLAY_CLASS_KEY) else {
             return Vec::new();
         };
@@ -116,15 +127,22 @@ mod imp {
         keys.sort();
         keys.iter()
             .filter_map(|k| {
-                number(
+                let path = format!(r"{DISPLAY_CLASS_KEY}\{k}");
+                let size = number(
                     Hive::LocalMachine,
-                    &format!(r"{DISPLAY_CLASS_KEY}\{k}"),
+                    &path,
                     "HardwareInformation.qwMemorySize",
                 )
                 .ok()
-                .flatten()
+                .flatten()?;
+                let desc = values(Hive::LocalMachine, &path)
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.into_iter().find(|(n, _)| n == "DriverDesc"))
+                    .map(|(_, d)| d)
+                    .unwrap_or_default();
+                Some((desc, size))
             })
-            .filter(|&s| s > 0)
             .collect()
     }
 
@@ -195,11 +213,14 @@ mod imp {
                 .into_iter()
                 .filter(|g| g.name.as_deref().is_some_and(is_real_gpu))
                 .enumerate()
-                .map(|(i, g)| GpuInfo {
-                    name: text(g.name),
-                    vram_bytes: vram_for(i, &reg_vram, g.adapter_ram.map(u64::from)),
-                    driver_version: text(g.driver_version),
-                    driver_date: g.driver_date.as_deref().and_then(cim_date),
+                .map(|(i, g)| {
+                    let name = text(g.name);
+                    GpuInfo {
+                        vram_bytes: vram_for(i, &name, &reg_vram, g.adapter_ram.map(u64::from)),
+                        name,
+                        driver_version: text(g.driver_version),
+                        driver_date: g.driver_date.as_deref().and_then(cim_date),
+                    }
                 })
                 .collect(),
             volumes: fixed_volumes().unwrap_or_default(),
@@ -227,9 +248,25 @@ mod tests {
         assert!(is_real_gpu("NVIDIA GeForce RTX 4070"));
         assert!(!is_real_gpu("Microsoft Basic Display Adapter"));
         assert!(!is_real_gpu("Microsoft Remote Display Adapter"));
-        assert_eq!(vram_for(0, &[12 << 30], Some(4 << 30)), Some(12 << 30));
-        assert_eq!(vram_for(1, &[12 << 30], Some(1 << 30)), Some(1 << 30));
-        assert_eq!(vram_for(0, &[0], None), None);
+        let reg = |d: &str, s: u64| (d.to_string(), s);
+        // Matched by adapter name first: WMI and registry orders differ on hybrid PCs.
+        let both = [
+            reg("NVIDIA GeForce RTX 5070 Ti", 16 << 30),
+            reg("AMD Radeon(TM) Graphics", 2 << 30),
+        ];
+        assert_eq!(
+            vram_for(0, "AMD Radeon(TM) Graphics", &both, Some(1 << 30)),
+            Some(2 << 30)
+        );
+        assert_eq!(
+            vram_for(1, "nvidia geforce rtx 5070 ti", &both, None),
+            Some(16 << 30)
+        );
+        // No name match: SysInfo.ps1's index rule, then AdapterRAM.
+        let unnamed = [reg("", 12 << 30)];
+        assert_eq!(vram_for(0, "GPU", &unnamed, Some(4 << 30)), Some(12 << 30));
+        assert_eq!(vram_for(1, "GPU", &unnamed, Some(1 << 30)), Some(1 << 30));
+        assert_eq!(vram_for(0, "GPU", &[reg("", 0)], None), None);
     }
 
     #[cfg(windows)]
