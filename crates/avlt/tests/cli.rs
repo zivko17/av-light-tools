@@ -17,7 +17,7 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-const GROUPS: [(&str, &[&str]); 7] = [
+const GROUPS: [(&str, &[&str]); 6] = [
     (
         "calc",
         &[
@@ -37,7 +37,6 @@ const GROUPS: [(&str, &[&str]); 7] = [
             "dsp",
         ],
     ),
-    ("edid", &["list", "info", "check", "diff", "dump"]),
     (
         "net",
         &[
