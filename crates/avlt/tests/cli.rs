@@ -17,8 +17,8 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// Groups whose subcommands are still stubs (`calc`, `edid` and `net` are implemented; see `cli_calc.rs`, `cli_edid.rs`, `cli_net.rs`).
-const GROUPS: [(&str, &[&str]); 4] = [
+/// Groups whose subcommands are still stubs (`calc`, `edid`, `net`, `media` and `ndi` are implemented; see `cli_*.rs`).
+const GROUPS: [(&str, &[&str]); 2] = [
     (
         "sys",
         &[
@@ -37,19 +37,6 @@ const GROUPS: [(&str, &[&str]); 4] = [
             "cleanup",
         ],
     ),
-    (
-        "media",
-        &[
-            "convert",
-            "normalize",
-            "trim",
-            "extract",
-            "resample",
-            "channels",
-            "probe",
-        ],
-    ),
-    ("ndi", &["launch", "check", "services", "config"]),
     ("util", &["backup", "search", "weather", "timer"]),
 ];
 
@@ -92,19 +79,8 @@ fn every_subcommand_exists_and_is_a_stub() {
 }
 
 #[test]
-fn ndi_check_with_args_is_not_implemented() {
-    let o = avlt(&["ndi", "check", "1.2.3.4/24"]);
-    assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("not implemented"), "{}", stderr(&o));
-    assert!(stdout(&o).is_empty(), "{}", stdout(&o));
-}
-
-#[test]
 fn json_flag_is_global() {
-    for args in [
-        ["--json", "ndi", "check", "1.2.3.4/24"],
-        ["ndi", "check", "1.2.3.4/24", "--json"],
-    ] {
+    for args in [["--json", "gui"], ["gui", "--json"]] {
         let o = avlt(&args);
         assert_eq!(o.status.code(), Some(1), "{args:?}: {}", stderr(&o));
     }
@@ -115,6 +91,7 @@ fn gui_is_not_implemented_yet() {
     let o = avlt(&["gui"]);
     assert_eq!(o.status.code(), Some(1));
     assert!(stderr(&o).contains("not implemented"), "{}", stderr(&o));
+    assert!(stdout(&o).is_empty(), "{}", stdout(&o));
 }
 
 #[test]
@@ -127,7 +104,7 @@ fn unknown_subcommand_is_usage_error() {
 
 #[test]
 fn piped_output_has_no_colour_and_json_stdout_stays_clean() {
-    let o = avlt(&["--json", "ndi", "check", "1.2.3.4/24"]);
+    let o = avlt(&["--json", "gui"]);
     assert!(!stderr(&o).contains('\x1b'), "{:?}", stderr(&o));
     assert!(stderr(&o).starts_with("error: "), "{:?}", stderr(&o));
     assert!(stdout(&o).is_empty(), "{:?}", stdout(&o));
