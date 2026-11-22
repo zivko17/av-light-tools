@@ -60,18 +60,23 @@ fn every_subcommand_exists_and_is_a_stub() {
 
 #[test]
 fn json_flag_is_global() {
-    for args in [["--json", "gui"], ["gui", "--json"]] {
+    for args in [
+        ["--json", "edid", "info", "no_such_edid.bin"],
+        ["edid", "info", "no_such_edid.bin", "--json"],
+    ] {
         let o = avlt(&args);
-        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", stderr(&o));
+        // Accepted in both positions: the command runs and fails on the missing file.
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(stderr(&o).contains("File not found"), "{args:?}: {}", stderr(&o));
     }
 }
 
 #[test]
-fn gui_is_not_implemented_yet() {
-    let o = avlt(&["gui"]);
-    assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("not implemented"), "{}", stderr(&o));
-    assert!(stdout(&o).is_empty(), "{}", stdout(&o));
+fn gui_has_help() {
+    // `avlt gui` itself opens a window, which a test cannot close; its help must work.
+    let o = avlt(&["gui", "--help"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("graphical interface"), "{}", stdout(&o));
 }
 
 #[test]
@@ -84,7 +89,7 @@ fn unknown_subcommand_is_usage_error() {
 
 #[test]
 fn piped_output_has_no_colour_and_json_stdout_stays_clean() {
-    let o = avlt(&["--json", "gui"]);
+    let o = avlt(&["--json", "edid", "info", "no_such_edid.bin"]);
     assert!(!stderr(&o).contains('\x1b'), "{:?}", stderr(&o));
     assert!(stderr(&o).starts_with("error: "), "{:?}", stderr(&o));
     assert!(stdout(&o).is_empty(), "{:?}", stdout(&o));

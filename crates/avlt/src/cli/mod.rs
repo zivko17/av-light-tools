@@ -18,8 +18,8 @@ pub mod util;
 
 use std::io::{self, Write};
 
-use avlt_core::{Error, Result};
-use clap::{Args, Parser, Subcommand};
+use avlt_core::Result;
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 
 use self::output::Out;
@@ -64,19 +64,6 @@ pub enum Command {
     Gui,
 }
 
-/// Placeholder arguments for subcommands whose real arguments a later task defines.
-#[derive(Debug, Args)]
-pub struct Pending {
-    /// Arguments (not defined yet)
-    #[arg(hide = true)]
-    pub args: Vec<String>,
-}
-
-/// Result of a subcommand that is not ported yet.
-pub fn not_implemented() -> Result<()> {
-    Err(Error::Other("not implemented".into()))
-}
-
 /// Dispatches a parsed command to its group.
 pub fn run(command: Command, out: &Out) -> Result<()> {
     match command {
@@ -87,7 +74,7 @@ pub fn run(command: Command, out: &Out) -> Result<()> {
         Command::Media(cmd) => media::run(cmd, out),
         Command::Ndi(cmd) => ndi::run(cmd, out),
         Command::Util(cmd) => util::run(cmd, out),
-        Command::Gui => not_implemented(),
+        Command::Gui => crate::gui::run(),
     }
 }
 
