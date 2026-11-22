@@ -16,7 +16,6 @@ clap.workspace = true
 serde.workspace = true
 # preserve_order: the GUI shows result fields in struct order, not sorted.
 serde_json = { workspace = true, features = ["preserve_order"] }
-anyhow.workspace = true
 chrono.workspace = true
 tokio = { workspace = true, features = ["signal", "sync", "rt"] }
 eframe = { workspace = true, default-features = false, features = ["default_fonts", "glow", "clipboard", "x11"] }
