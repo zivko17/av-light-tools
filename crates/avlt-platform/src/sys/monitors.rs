@@ -25,6 +25,23 @@ pub fn set_mode(device_name: &str, mode: DisplayMode, test_only: bool) -> Result
     imp::set_mode(device_name, mode, test_only)
 }
 
+/// Hardware id of a monitor device path: `MSI3CA4` from `MONITOR\MSI3CA4\{...}\0001`
+/// (GDI) or `DISPLAY\MSI3CA4\5&...&UID4353_0` (WMI `InstanceName`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn pnp_id(path: &str) -> Option<String> {
+    let id = path.split('\\').nth(1)?.trim();
+    (!id.is_empty()).then(|| id.to_ascii_uppercase())
+}
+
+/// The WMI model name of the only monitor with hardware id `id` (two identical monitors
+/// cannot be told apart this way).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn unique_model(id: &str, models: &[(String, String)]) -> Option<String> {
+    let mut found = models.iter().filter(|(i, m)| i == id && !m.is_empty());
+    let first = found.next()?;
+    found.next().is_none().then(|| first.1.clone())
+}
+
 /// Text of a `DISP_CHANGE_*` result.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn disp_change_text(code: i32) -> &'static str {
@@ -64,7 +81,7 @@ mod imp {
     };
     use windows::core::{BOOL, HSTRING, PCWSTR};
 
-    use super::disp_change_text;
+    use super::{disp_change_text, pnp_id, unique_model};
     use crate::wmi::{connect, query};
     use crate::{Error, Result};
 
@@ -274,7 +291,30 @@ mod imp {
         out
     }
 
+    /// `(hardware id, model)` of every monitor WMI knows.
+    fn wmi_models() -> Vec<(String, String)> {
+        let Ok(con) = connect("root\\wmi") else {
+            return Vec::new();
+        };
+        // Every field of MonitorId must be selected: the wmi deserializer fails otherwise.
+        query::<MonitorId>(
+            &con,
+            "SELECT InstanceName, ManufacturerName, UserFriendlyName, SerialNumberID \
+             FROM WmiMonitorID",
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|m| {
+            Some((
+                pnp_id(&m.instance_name?)?,
+                wmi_chars(&m.user_friendly_name.unwrap_or_default()),
+            ))
+        })
+        .collect()
+    }
+
     pub fn displays() -> Result<Vec<Display>> {
+        let models = wmi_models();
         let mut list = Vec::new();
         let mut index = 0u32;
         for i in 0u32.. {
@@ -288,9 +328,12 @@ mod imp {
             }
             index += 1;
             let device_name = wide_str(&adapter.DeviceName);
-            let monitor = display_device(Some(&device_name), 0)
-                .map(|m| wide_str(&m.DeviceString))
-                .filter(|s| !s.trim().is_empty());
+            let monitor = display_device(Some(&device_name), 0).and_then(|m| {
+                pnp_id(&wide_str(&m.DeviceID))
+                    .and_then(|id| unique_model(&id, &models))
+                    .or_else(|| Some(wide_str(&m.DeviceString)))
+                    .filter(|s| !s.trim().is_empty())
+            });
             let current = current_settings(&device_name);
             let bits = current.as_ref().map_or(32, |dm| dm.dmBitsPerPel);
             let mut modes: Vec<DisplayMode> =
@@ -388,6 +431,30 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_names_by_hardware_id() {
+        assert_eq!(
+            pnp_id(r"MONITOR\MSI3CA4\{4d36e96e-e325-11ce-bfc1-08002be10318}\0001").as_deref(),
+            Some("MSI3CA4")
+        );
+        assert_eq!(
+            pnp_id(r"DISPLAY\msi3ca4\5&2b0c&0&UID4353_0").as_deref(),
+            Some("MSI3CA4")
+        );
+        assert_eq!(pnp_id("nothing"), None);
+        let models = [
+            ("MSI3CA4".to_string(), "MSI MP243X".to_string()),
+            ("AUS24A1".to_string(), "ASUS VA24E".to_string()),
+            ("AUS24A1".to_string(), "ASUS VA24E".to_string()),
+        ];
+        assert_eq!(
+            unique_model("MSI3CA4", &models).as_deref(),
+            Some("MSI MP243X")
+        );
+        assert_eq!(unique_model("AUS24A1", &models), None);
+        assert_eq!(unique_model("XXX0000", &models), None);
+    }
 
     #[test]
     fn disp_change_texts() {
