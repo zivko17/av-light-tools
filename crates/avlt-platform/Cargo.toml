@@ -1,0 +1,21 @@
+[package]
+name = "avlt-platform"
+description = "Windows-specific functionality for avlt; returns Error::Unsupported elsewhere"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+avlt-core.workspace = true
+serde.workspace = true
+tokio.workspace = true
+sysinfo.workspace = true
+ureq.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+wmi.workspace = true
+winreg.workspace = true
+
+[lints]
+workspace = true

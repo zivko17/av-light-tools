@@ -25,3 +25,6 @@ publish/
 
 # Generated knowledge-graph output
 graphify-out/
+
+# Rust build output
+target/
