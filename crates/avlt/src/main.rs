@@ -16,20 +16,12 @@ fn main() -> ExitCode {
     let out = Out::new(cli.json);
     let Some(command) = cli.command else {
         // Double-click in Explorer: Windows made a console just for this process. Open the
-        // GUI, which drops that console (its window closes).
+        // GUI, which drops that console (its window closes) and reports a failure to open
+        // in a message box.
         if avlt_platform::console::owns_console_alone() {
             return match gui::run() {
                 Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    // The console is gone by now: a message box is the only way to tell.
-                    let text = e.to_string();
-                    out.err(&text);
-                    avlt_platform::console::show_error_dialog(
-                        "avlt",
-                        &avlt_platform::console::startup_error_text(&text),
-                    );
-                    ExitCode::FAILURE
-                }
+                Err(_) => ExitCode::FAILURE,
             };
         }
         // No arguments from a terminal: show the help.

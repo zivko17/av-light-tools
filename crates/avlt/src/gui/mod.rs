@@ -191,11 +191,24 @@ impl eframe::App for App {
 ///
 /// A process that owns its console alone (double-click, or the elevated relaunch that
 /// ShellExecute "runas" starts with a fresh console) detaches from it first, so no stray
-/// console window stays open (closing it would kill the GUI).
+/// console window stays open (closing it would kill the GUI). Once detached, stderr goes
+/// nowhere, so a window that fails to open is reported in a message box instead.
 pub fn run() -> Result<()> {
-    if avlt_platform::console::owns_console_alone() {
+    let detached = avlt_platform::console::owns_console_alone();
+    if detached {
         avlt_platform::console::detach_console();
     }
+    let result = open_window();
+    if let (true, Err(e)) = (detached, &result) {
+        avlt_platform::console::show_error_dialog(
+            "avlt",
+            &avlt_platform::console::startup_error_text(&e.to_string()),
+        );
+    }
+    result
+}
+
+fn open_window() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("avlt")
