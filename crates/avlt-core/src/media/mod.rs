@@ -28,13 +28,16 @@ pub const MEDIA_EXTENSIONS: [&str; 14] = [
 ];
 
 /// Loudness measured by the first `loudnorm` pass (`print_format=json`).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+///
+/// The values are kept as the text ffmpeg printed (validated as finite numbers), so pass 2
+/// receives exactly what pass 1 measured.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LoudnormMeasure {
-    pub input_i: f64,
-    pub input_tp: f64,
-    pub input_lra: f64,
-    pub input_thresh: f64,
-    pub target_offset: f64,
+    pub input_i: String,
+    pub input_tp: String,
+    pub input_lra: String,
+    pub input_thresh: String,
+    pub target_offset: String,
 }
 
 /// Extracts the `loudnorm` JSON block from ffmpeg's stderr.
@@ -57,13 +60,14 @@ pub fn parse_loudnorm_json(stderr: &str) -> Result<LoudnormMeasure> {
         .ok_or_else(|| bad("unterminated JSON block"))?;
     let value: serde_json::Value =
         serde_json::from_str(&stderr[start..end]).map_err(|e| bad(&e.to_string()))?;
-    let num = |name: &str| -> Result<f64> {
-        let v = match value.get(name) {
-            Some(serde_json::Value::String(s)) => s.trim().parse::<f64>().ok(),
-            Some(serde_json::Value::Number(n)) => n.as_f64(),
+    // Raw text of a value; it must parse as a finite number (silence gives `-inf`).
+    let num = |name: &str| -> Result<String> {
+        let raw = match value.get(name) {
+            Some(serde_json::Value::String(s)) => Some(s.trim().to_string()),
+            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
             _ => None,
         };
-        v.filter(|v| v.is_finite())
+        raw.filter(|r| r.parse::<f64>().is_ok_and(f64::is_finite))
             .ok_or_else(|| bad(&format!("'{name}' is missing or not a finite number")))
     };
     Ok(LoudnormMeasure {
@@ -136,12 +140,17 @@ pub fn parse_probe(file: &str, json: &str) -> Result<ProbeInfo> {
     })
 }
 
+/// `path` without surrounding spaces and double quotes (a pasted `"C:\a b\c.wav"`).
+pub fn strip_quotes(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    PathBuf::from(raw.trim().trim_matches('"').trim())
+}
+
 /// The files `path` stands for: the file itself, or every media file under a folder
 /// (recursive, sorted). Surrounding double quotes and spaces are ignored.
 pub fn collect_inputs(path: &Path) -> Result<Vec<PathBuf>> {
-    let raw = path.to_string_lossy();
-    let clean = raw.trim().trim_matches('"').trim();
-    let path = Path::new(clean);
+    let path = strip_quotes(path);
+    let path = path.as_path();
     if !path.exists() {
         return Err(Error::InvalidInput(format!(
             "path not found: {}",
@@ -241,11 +250,11 @@ Input #0, wav, from 'in file.wav':
         assert_eq!(
             m,
             LoudnormMeasure {
-                input_i: -27.61,
-                input_tp: -4.47,
-                input_lra: 18.10,
-                input_thresh: -39.20,
-                target_offset: 0.58,
+                input_i: "-27.61".into(),
+                input_tp: "-4.47".into(),
+                input_lra: "18.10".into(),
+                input_thresh: "-39.20".into(),
+                target_offset: "0.58".into(),
             }
         );
     }
@@ -263,7 +272,7 @@ Input #0, wav, from 'in file.wav':
     #[test]
     fn loudnorm_accepts_plain_numbers() {
         let json = r#"{"input_i": -20, "input_tp": -1.5, "input_lra": 6, "input_thresh": -30.5, "target_offset": 0}"#;
-        assert_eq!(parse_loudnorm_json(json).unwrap().input_tp, -1.5);
+        assert_eq!(parse_loudnorm_json(json).unwrap().input_tp, "-1.5");
     }
 
     const PROBE_JSON: &str = r#"{

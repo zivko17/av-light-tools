@@ -42,6 +42,21 @@ fn launch_rejects_unknown_apps_and_missing_app() {
 #[test]
 fn launch_without_an_install_is_a_missing_tool() {
     let empty = tempfile::tempdir().unwrap();
+    // Pre-flight: `launch` may only run once AVLT_NDI_ROOT is proven to be honoured,
+    // otherwise it would start the real NDI app of the machine running the tests.
+    if cfg!(windows) {
+        let pre = avlt(&["ndi", "check", "--json"])
+            .env("AVLT_NDI_ROOT", empty.path())
+            .output()
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&stdout(&pre)).unwrap();
+        let base = json["install"]["base"].as_str().unwrap();
+        assert!(
+            base.starts_with(empty.path().to_str().unwrap()),
+            "AVLT_NDI_ROOT not honoured ({base}); refusing to run `ndi launch`"
+        );
+        assert_eq!(json["install"]["installed"], false);
+    }
     let o = avlt(&["ndi", "launch", "monitor"])
         .env("AVLT_NDI_ROOT", empty.path())
         .output()
@@ -52,34 +67,29 @@ fn launch_without_an_install_is_a_missing_tool() {
     assert!(stdout(&o).is_empty(), "{}", stdout(&o));
 }
 
-/// Fake `NDI 5 Tools` and `NDI 7 Tools` folders; the newest must be used. The "app" is a
-/// copy of avlt itself, which prints its help and exits when started without arguments.
-#[cfg(windows)]
+/// Fake `NDI 5 Tools` and `NDI 7 Tools` folders: the newest must be detected. Uses `ndi
+/// check`, which only reads; no test may reach the code that starts a process.
 #[test]
-fn launch_uses_the_newest_install_and_starts_the_app() {
-    let pf = tempfile::tempdir().unwrap();
+fn check_detects_the_newest_install_in_a_fake_root() {
+    let root = tempfile::tempdir().unwrap();
     for version in [5, 7] {
-        let dir = pf
-            .path()
-            .join("NDI")
-            .join(format!("NDI {version} Tools"))
-            .join("Router");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::copy(
-            env!("CARGO_BIN_EXE_avlt"),
-            dir.join("Application.NDI.Router.exe"),
-        )
-        .unwrap();
+        std::fs::create_dir_all(root.path().join(format!("NDI {version} Tools"))).unwrap();
     }
-    let o = avlt(&["ndi", "launch", "router", "--json"])
-        .env("AVLT_NDI_ROOT", pf.path().join("NDI"))
+    let o = avlt(&["ndi", "check", "--json"])
+        .env("AVLT_NDI_ROOT", root.path())
         .output()
         .unwrap();
+    if !cfg!(windows) {
+        assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+        return;
+    }
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let json: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
-    assert_eq!(json["app"], "router");
-    let path = json["path"].as_str().unwrap();
-    assert!(path.contains("NDI 7 Tools"), "{path}");
+    let base = json["install"]["base"].as_str().unwrap();
+    assert!(base.ends_with("NDI 7 Tools"), "{base}");
+    assert!(base.starts_with(root.path().to_str().unwrap()), "{base}");
+    assert_eq!(json["install"]["version"], 7);
+    assert_eq!(json["install"]["installed"], true);
 }
 
 fn write_config(appdata: &Path, body: &str) {

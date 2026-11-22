@@ -198,7 +198,7 @@ fn normalize(a: &InputArgs, out: &Out) -> Result<()> {
 }
 
 fn trim(a: &TrimArgs, out: &Out) -> Result<()> {
-    if a.files.input.is_dir() {
+    if media::strip_quotes(&a.files.input).is_dir() {
         return Err(Error::InvalidInput(
             "trim takes a single file, not a folder".into(),
         ));
@@ -385,19 +385,20 @@ fn format_duration(seconds: f64) -> String {
 
 fn probe(a: &ProbeArgs, out: &Out) -> Result<()> {
     let ffprobe = find_tool("ffprobe", FFMPEG_WINGET)?;
-    if !a.file.exists() {
+    let file = media::strip_quotes(&a.file);
+    if !file.exists() {
         return Err(Error::InvalidInput(format!(
             "file not found: {}",
-            a.file.display()
+            file.display()
         )));
     }
-    let args = media::probe_args(&a.file);
+    let args = media::probe_args(&file);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let json = capture(&ffprobe, &refs)?;
     if json.trim().is_empty() {
         return Err(Error::Other("ffprobe returned no data".into()));
     }
-    let info = media::parse_probe(&a.file.to_string_lossy(), &json)?;
+    let info = media::parse_probe(&file.to_string_lossy(), &json)?;
     out.emit(&info, |p, out| {
         out.title("=== AUDIO PROBE ===");
         out.field("File", &p.file);

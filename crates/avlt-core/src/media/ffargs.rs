@@ -213,11 +213,11 @@ mod tests {
 
     fn measure() -> LoudnormMeasure {
         LoudnormMeasure {
-            input_i: -27.61,
-            input_tp: -4.47,
-            input_lra: 18.1,
-            input_thresh: -38.2,
-            target_offset: 0.7,
+            input_i: "-27.61".into(),
+            input_tp: "-4.47".into(),
+            input_lra: "18.10".into(),
+            input_thresh: "-38.20".into(),
+            target_offset: "0.70".into(),
         }
     }
 
@@ -339,7 +339,7 @@ mod tests {
                 "-i",
                 "a.mp3",
                 "-af",
-                "loudnorm=I=-23:LRA=7:TP=-2:measured_I=-27.61:measured_TP=-4.47:measured_LRA=18.1:measured_thresh=-38.2:offset=0.7:linear=true",
+                "loudnorm=I=-23:LRA=7:TP=-2:measured_I=-27.61:measured_TP=-4.47:measured_LRA=18.10:measured_thresh=-38.20:offset=0.70:linear=true",
                 "-c:a",
                 "libmp3lame",
                 "a_norm.mp3"
