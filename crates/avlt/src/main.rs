@@ -20,7 +20,16 @@ fn main() -> ExitCode {
         if avlt_platform::console::owns_console_alone() {
             return match gui::run() {
                 Ok(()) => ExitCode::SUCCESS,
-                Err(_) => ExitCode::FAILURE,
+                Err(e) => {
+                    // The console is gone by now: a message box is the only way to tell.
+                    let text = e.to_string();
+                    out.err(&text);
+                    avlt_platform::console::show_error_dialog(
+                        "avlt",
+                        &avlt_platform::console::startup_error_text(&text),
+                    );
+                    ExitCode::FAILURE
+                }
             };
         }
         // No arguments from a terminal: show the help.
