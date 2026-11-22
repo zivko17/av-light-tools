@@ -2,18 +2,28 @@
 
 use std::future::Future;
 use std::io::{self, IsTerminal, Write};
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
 
 use avlt_core::config::Config;
 use avlt_core::net::COMMON_PORTS;
-use avlt_core::net::format::{LinkClass, format_link_speed, link_class};
-use avlt_core::net::model::{Adapter, MyIp, PortCheck, PortScan, VendorSource};
+use avlt_core::net::format::{
+    LatencyStats, LinkClass, format_bps, format_bytes, format_elapsed, format_link_speed,
+    latency_bars, latency_class, link_class, traffic_rate,
+};
+use avlt_core::net::model::{
+    Adapter, LatencySample, MyIp, PingHost, PingRound, PortCheck, PortScan, SpeedSample,
+    VendorSource,
+};
 use avlt_core::net::target::parse_scan_target;
 use avlt_core::{Error, Result};
-use avlt_platform::net as pnet;
+use avlt_platform::net::{self as pnet, PING_TIMEOUT};
+use avlt_platform::process::{self, find_tool};
 use clap::{Args, Subcommand};
 use serde::Serialize;
+use tokio::time::MissedTickBehavior;
 
 use super::output::{Out, exit_if_broken_pipe};
 use super::{Pending, not_implemented};
@@ -33,16 +43,16 @@ pub enum NetCmd {
     Portscan(HostArg),
     /// Identify a device by MAC vendor
     Whoison(WhoisonArgs),
-    /// Ping several hosts at once
-    Pingmulti(Pending),
-    /// Latency and jitter to a host
-    Latency(Pending),
-    /// Live adapter throughput
-    Speed(Pending),
+    /// Ping several hosts at once, every second
+    Pingmulti(PingmultiArgs),
+    /// Latency and jitter to a host, every second
+    Latency(LatencyArgs),
+    /// Live adapter throughput, every second
+    Speed(SpeedArgs),
     /// Active TCP connections
     Connections,
-    /// Internet speed test
-    Speedtest(Pending),
+    /// Internet speed test (Ookla Speedtest CLI)
+    Speedtest,
     /// Flush the DNS cache
     Flushdns(Pending),
     /// Restart a network adapter
@@ -94,6 +104,42 @@ pub struct WhoisonArgs {
     pub offline: bool,
 }
 
+/// Sample limit of the live monitors.
+#[derive(Debug, Args)]
+pub struct CountArg {
+    /// Stop after N samples (default: run until Ctrl+C)
+    #[arg(short = 'n', long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub count: Option<u64>,
+}
+
+/// `net pingmulti` arguments.
+#[derive(Debug, Args)]
+pub struct PingmultiArgs {
+    /// Hosts or IPv4 addresses, separated by spaces or commas
+    #[arg(required = true, num_args = 1..)]
+    pub hosts: Vec<String>,
+    #[command(flatten)]
+    pub count: CountArg,
+}
+
+/// `net latency` arguments.
+#[derive(Debug, Args)]
+pub struct LatencyArgs {
+    /// Host name or IPv4 address
+    pub host: String,
+    #[command(flatten)]
+    pub count: CountArg,
+}
+
+/// `net speed` arguments.
+#[derive(Debug, Args)]
+pub struct SpeedArgs {
+    /// Adapter name (default: avlt.toml `iface`, then the adapter of the default route)
+    pub iface: Option<String>,
+    #[command(flatten)]
+    pub count: CountArg,
+}
+
 /// Runs an `avlt net` subcommand.
 pub fn run(cmd: NetCmd, out: &Out) -> Result<()> {
     match cmd {
@@ -103,11 +149,11 @@ pub fn run(cmd: NetCmd, out: &Out) -> Result<()> {
         NetCmd::Portcheck(a) => portcheck(a, out),
         NetCmd::Portscan(a) => portscan(a, out),
         NetCmd::Whoison(a) => whoison(a, out),
-        NetCmd::Pingmulti(_) => not_implemented(),
-        NetCmd::Latency(_) => not_implemented(),
-        NetCmd::Speed(_) => not_implemented(),
+        NetCmd::Pingmulti(a) => pingmulti(a, out),
+        NetCmd::Latency(a) => latency(a, out),
+        NetCmd::Speed(a) => speed(a, out),
         NetCmd::Connections => connections(out),
-        NetCmd::Speedtest(_) => not_implemented(),
+        NetCmd::Speedtest => speedtest(out),
         NetCmd::Flushdns(_) => not_implemented(),
         NetCmd::ResetNic(_) => not_implemented(),
         NetCmd::Setip(_) => not_implemented(),
@@ -156,7 +202,6 @@ fn raw_line(s: &str) {
 }
 
 /// One compact JSON document on its own line (live monitors with `--json`).
-#[allow(dead_code)]
 fn json_line<T: Serialize>(value: &T) {
     match serde_json::to_string(value) {
         Ok(s) => raw_line(&s),
@@ -514,4 +559,345 @@ fn connections(out: &Out) -> Result<()> {
 
 fn endpoint(addr: std::net::IpAddr, port: u16) -> String {
     std::net::SocketAddr::new(addr, port).to_string()
+}
+
+// ---------------------------------------------------------------- live monitors
+
+/// Paces a live monitor: one step per second until Ctrl+C or the sample limit.
+struct Ticker {
+    interval: tokio::time::Interval,
+    stop: Pin<Box<dyn Future<Output = ()> + Send>>,
+    remaining: Option<u64>,
+}
+
+impl Ticker {
+    /// `now`: first step immediately; otherwise after one second (rate monitors).
+    /// Must be created inside the runtime.
+    fn new(count: Option<u64>, now: bool) -> Ticker {
+        let period = Duration::from_secs(1);
+        let start = tokio::time::Instant::now() + if now { Duration::ZERO } else { period };
+        let mut interval = tokio::time::interval_at(start, period);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Ticker {
+            interval,
+            // If Ctrl+C cannot be hooked the monitor just runs until killed.
+            stop: Box::pin(async {
+                if tokio::signal::ctrl_c().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }),
+            remaining: count,
+        }
+    }
+
+    /// Waits for the next step; `false` once the monitor must stop.
+    async fn next(&mut self) -> bool {
+        if self.remaining == Some(0) {
+            return false;
+        }
+        tokio::select! {
+            biased;
+            () = &mut self.stop => return false,
+            _ = self.interval.tick() => {}
+        }
+        if let Some(n) = &mut self.remaining {
+            *n -= 1;
+        }
+        true
+    }
+}
+
+/// Splits `a,b c` style host lists, dropping blanks and duplicates (order kept).
+fn split_hosts(args: &[String]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for h in args.iter().flat_map(|a| a.split(',')).map(str::trim) {
+        if !h.is_empty() && !hosts.iter().any(|x| x == h) {
+            hosts.push(h.to_string());
+        }
+    }
+    hosts
+}
+
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// NetTools.ps1 `pingmulti` (lines 208-240) / NetMaint PingPage, refreshed every second.
+fn pingmulti(args: PingmultiArgs, out: &Out) -> Result<()> {
+    if !cfg!(windows) {
+        return Err(Error::Unsupported);
+    }
+    let targets: Vec<(String, Option<Ipv4Addr>)> = split_hosts(&args.hosts)
+        .into_iter()
+        .map(|h| {
+            let ip = pnet::resolve_ipv4(&h).ok();
+            (h, ip)
+        })
+        .collect();
+    for (h, ip) in &targets {
+        if ip.is_none() {
+            out.warn(&format!("cannot resolve '{h}'"));
+        }
+    }
+    if !out.json {
+        out.title(&format!(
+            "Monitoring {} hosts - Ctrl+C to stop",
+            targets.len()
+        ));
+    }
+    block_on(async {
+        let start = Instant::now();
+        let mut failures = vec![0u64; targets.len()];
+        let mut ticker = Ticker::new(args.count.count, true);
+        while ticker.next().await {
+            let mut set = tokio::task::JoinSet::new();
+            for (i, (_, ip)) in targets.iter().enumerate() {
+                let ip = *ip;
+                set.spawn(async move {
+                    let rtt = match ip {
+                        Some(ip) => pnet::ping(ip, PING_TIMEOUT).await,
+                        None => None,
+                    };
+                    (i, rtt)
+                });
+            }
+            let mut rtts = vec![None; targets.len()];
+            while let Some(Ok((i, rtt))) = set.join_next().await {
+                rtts[i] = rtt;
+            }
+            let hosts = targets
+                .iter()
+                .zip(rtts)
+                .zip(failures.iter_mut())
+                .map(|(((host, ip), rtt), fails)| {
+                    if rtt.is_none() {
+                        *fails += 1;
+                    }
+                    PingHost {
+                        host: host.clone(),
+                        ip: *ip,
+                        online: rtt.is_some(),
+                        latency_ms: rtt.map(millis),
+                        failures: *fails,
+                    }
+                })
+                .collect();
+            let round = PingRound {
+                elapsed_s: start.elapsed().as_secs_f64(),
+                hosts,
+            };
+            if out.json {
+                json_line(&round);
+            } else {
+                render_ping_round(&round, start.elapsed(), out);
+            }
+        }
+    })?;
+    Ok(())
+}
+
+fn render_ping_round(round: &PingRound, elapsed: Duration, out: &Out) {
+    line(out, "");
+    line(
+        out,
+        &paint(
+            out,
+            Colour::Dim,
+            &format!("  Multi-ping monitor - {}", format_elapsed(elapsed)),
+        ),
+    );
+    line(
+        out,
+        &paint(
+            out,
+            Colour::Dim,
+            &format!(
+                "  {:<20} {:<10} {:<10} {}",
+                "HOST", "STATUS", "LATENCY", "FAILURES"
+            ),
+        ),
+    );
+    for h in &round.hosts {
+        let (status, latency, colour) = match (h.ip, h.latency_ms) {
+            (None, _) => ("ERROR", "-".to_string(), Colour::Yellow),
+            (Some(_), Some(ms)) => ("ONLINE", format!("{ms} ms"), Colour::Green),
+            (Some(_), None) => ("OFFLINE", "-".to_string(), Colour::Red),
+        };
+        let row = format!(
+            "  {:<20} {:<10} {:<10} {}",
+            h.host, status, latency, h.failures
+        );
+        line(out, &paint(out, colour, &row));
+    }
+}
+
+/// NetTools.ps1 `latency` (lines 242-266) plus loss / jitter statistics.
+fn latency(args: LatencyArgs, out: &Out) -> Result<()> {
+    if !cfg!(windows) {
+        return Err(Error::Unsupported);
+    }
+    let ip = pnet::resolve_ipv4(&args.host)?;
+    if !out.json {
+        out.title(&format!(
+            "Latency monitor to {} ({ip}) - Ctrl+C to stop",
+            args.host
+        ));
+        line(
+            out,
+            &paint(out, Colour::Dim, "  Time       Latency    Graph"),
+        );
+        line(
+            out,
+            &paint(
+                out,
+                Colour::Dim,
+                "  ---------  ---------  ----------------------------------------",
+            ),
+        );
+    }
+    let stats = block_on(async {
+        let start = Instant::now();
+        let mut stats = LatencyStats::default();
+        let mut ticker = Ticker::new(args.count.count, true);
+        while ticker.next().await {
+            let elapsed = start.elapsed();
+            let rtt = pnet::ping(ip, PING_TIMEOUT).await.map(millis);
+            stats.add(rtt);
+            if out.json {
+                json_line(&LatencySample {
+                    elapsed_s: elapsed.as_secs_f64(),
+                    host: args.host.clone(),
+                    ip,
+                    latency_ms: rtt,
+                    stats: stats.summary(),
+                });
+                continue;
+            }
+            let t = format_elapsed(elapsed);
+            let row = match rtt {
+                Some(ms) => paint(
+                    out,
+                    class_colour(latency_class(ms)),
+                    &format!("  {t:<9}  {ms:>5} ms   {}", "#".repeat(latency_bars(ms))),
+                ),
+                None => paint(out, Colour::Red, &format!("  {t:<9}  TIMEOUT    -")),
+            };
+            line(out, &row);
+        }
+        stats
+    })?;
+    if !out.json {
+        let s = stats.summary();
+        let float = |v: Option<f64>| v.map_or_else(|| "-".to_string(), |v| format!("{v:.1}"));
+        let int = |v: Option<u64>| v.map_or_else(|| "-".to_string(), |v| v.to_string());
+        line(out, "");
+        out.field(
+            "Packets",
+            &format!(
+                "{} sent, {} received, {:.0}% loss",
+                s.sent, s.received, s.loss_pct
+            ),
+        );
+        out.field(
+            "Round trip",
+            &format!(
+                "min {} / avg {} / max {} ms, jitter {} ms",
+                int(s.min_ms),
+                float(s.avg_ms),
+                int(s.max_ms),
+                float(s.jitter_ms)
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// NetTools.ps1 `speed` (lines 136-177) / NetMaint TrafficPage.
+fn speed(args: SpeedArgs, out: &Out) -> Result<()> {
+    let adapter = resolve_adapter(args.iface.as_deref())?;
+    let base = pnet::traffic(&adapter)?;
+    if !out.json {
+        out.title(&format!(
+            "Bandwidth monitor on '{}' - Ctrl+C to stop",
+            adapter.name
+        ));
+        line(
+            out,
+            &paint(
+                out,
+                Colour::Dim,
+                "  Time       Download       Upload         Total down     Total up",
+            ),
+        );
+        line(
+            out,
+            &paint(
+                out,
+                Colour::Dim,
+                "  ---------  -------------  -------------  -------------  -------------",
+            ),
+        );
+    }
+    block_on(async {
+        let start = Instant::now();
+        let (mut prev, mut last) = (base, start);
+        let mut ticker = Ticker::new(args.count.count, false);
+        while ticker.next().await {
+            let cur = pnet::traffic(&adapter)?;
+            let now = Instant::now();
+            let (down_bps, up_bps) = traffic_rate(&prev, &cur, (now - last).as_secs_f64());
+            let sample = SpeedSample {
+                elapsed_s: (now - start).as_secs_f64(),
+                adapter: adapter.name.clone(),
+                down_bps,
+                up_bps,
+                total_down_bytes: cur.rx_bytes.saturating_sub(base.rx_bytes),
+                total_up_bytes: cur.tx_bytes.saturating_sub(base.tx_bytes),
+            };
+            (prev, last) = (cur, now);
+            if out.json {
+                json_line(&sample);
+            } else {
+                line(
+                    out,
+                    &format!(
+                        "  {:<9}  {}  {}  {}  {}",
+                        format_elapsed(now - start),
+                        format_bps(sample.down_bps / 8.0),
+                        format_bps(sample.up_bps / 8.0),
+                        format_bytes(sample.total_down_bytes),
+                        format_bytes(sample.total_up_bytes)
+                    ),
+                );
+            }
+        }
+        Ok(())
+    })?
+}
+
+// ---------------------------------------------------------------- speedtest
+
+/// NetTools.ps1 `speedtest` (lines 196-206): runs the Ookla CLI.
+fn speedtest(out: &Out) -> Result<()> {
+    let exe = find_tool("speedtest", "Ookla.Speedtest.CLI")?;
+    let accept = ["--accept-license", "--accept-gdpr"];
+    if !out.json {
+        out.title("Speed test (Ookla)... approx 30 seconds");
+        let status = process::run(&exe, &accept)?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(Error::Other(format!("speedtest exited with {status}")))
+        };
+    }
+    let text = process::capture(&exe, &[accept[0], accept[1], "--format=json"])?;
+    let last = text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
+    let value: serde_json::Value = serde_json::from_str(last)
+        .map_err(|e| Error::Other(format!("speedtest returned invalid JSON: {e}")))?;
+    out.emit(&value, |_, _| {});
+    Ok(())
 }

@@ -27,6 +27,14 @@ fn json(o: &Output) -> Value {
         .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", stdout(o)))
 }
 
+/// One JSON document per stdout line (live monitors).
+fn json_lines(o: &Output) -> Vec<Value> {
+    stdout(o)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("bad JSON line ({e}): {l}")))
+        .collect()
+}
+
 fn free_port() -> u16 {
     TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .unwrap()
@@ -145,4 +153,99 @@ fn connections_lists_a_local_connection() {
     } else {
         assert_eq!(o.status.code(), Some(5));
     }
+}
+
+#[test]
+fn latency_emits_one_json_line_per_sample() {
+    let o = avlt(&["net", "latency", "127.0.0.1", "-n", "2", "--json"]);
+    if !cfg!(windows) {
+        assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+        return;
+    }
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let lines = json_lines(&o);
+    assert_eq!(lines.len(), 2, "{}", stdout(&o));
+    assert!(lines[0]["latency_ms"].is_u64(), "{}", lines[0]);
+    assert_eq!(lines[1]["stats"]["sent"], 2);
+    assert_eq!(lines[1]["stats"]["loss_pct"], 0.0);
+}
+
+#[test]
+fn latency_text_has_summary() {
+    let o = avlt(&["net", "latency", "127.0.0.1", "-n", "1"]);
+    if cfg!(windows) {
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        assert!(stdout(&o).contains(" ms"), "{}", stdout(&o));
+        assert!(stdout(&o).contains("jitter"), "{}", stdout(&o));
+    }
+}
+
+#[test]
+fn pingmulti_round_with_dedup_and_unresolvable_host() {
+    let o = avlt(&[
+        "net",
+        "pingmulti",
+        "127.0.0.1,127.0.0.1",
+        "localhost",
+        "no such host.invalid",
+        "-n",
+        "1",
+        "--json",
+    ]);
+    if !cfg!(windows) {
+        assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+        return;
+    }
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let lines = json_lines(&o);
+    assert_eq!(lines.len(), 1, "{}", stdout(&o));
+    let hosts = lines[0]["hosts"].as_array().unwrap();
+    assert_eq!(hosts.len(), 3, "{}", lines[0]);
+    assert_eq!(hosts[0]["online"], true);
+    assert_eq!(hosts[1]["online"], true);
+    assert_eq!(hosts[2]["ip"], Value::Null);
+    assert_eq!(hosts[2]["online"], false);
+    assert_eq!(hosts[2]["failures"], 1);
+}
+
+#[test]
+fn pingmulti_needs_a_host() {
+    let o = avlt(&["net", "pingmulti"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+}
+
+#[test]
+fn speed_samples_default_adapter() {
+    let o = avlt(&["net", "speed", "-n", "1", "--json"]);
+    if !cfg!(windows) {
+        assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
+        return;
+    }
+    match o.status.code() {
+        Some(0) => {
+            let lines = json_lines(&o);
+            assert_eq!(lines.len(), 1, "{}", stdout(&o));
+            assert!(lines[0]["down_bps"].is_number());
+            assert!(lines[0]["total_up_bytes"].is_u64());
+        }
+        Some(1) => assert!(stderr(&o).contains("no active network adapter")),
+        other => panic!("exit {other:?}: {}", stderr(&o)),
+    }
+    let o = avlt(&["net", "speed", "avlt-test-no-such-adapter", "-n", "1"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+}
+
+#[test]
+fn speedtest_without_cli_suggests_winget() {
+    let o = Command::new(env!("CARGO_BIN_EXE_avlt"))
+        .args(["net", "speedtest"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(3), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("winget install Ookla.Speedtest.CLI"),
+        "{}",
+        stderr(&o)
+    );
 }

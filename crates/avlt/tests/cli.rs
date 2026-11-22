@@ -38,18 +38,7 @@ const GROUPS: [(&str, &[&str]); 7] = [
         ],
     ),
     ("edid", &["list", "info", "check", "diff", "dump"]),
-    (
-        "net",
-        &[
-            "pingmulti",
-            "latency",
-            "speed",
-            "speedtest",
-            "flushdns",
-            "reset-nic",
-            "setip",
-        ],
-    ),
+    ("net", &["flushdns", "reset-nic", "setip"]),
     (
         "sys",
         &[
