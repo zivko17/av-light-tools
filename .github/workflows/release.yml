@@ -17,8 +17,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Tag must match the avlt crate version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $meta = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'avlt' }).version
+          if ($tag -ne $version) {
+            Write-Error "tag '$tag' != avlt crate version '$version'"
+            exit 1
+          }
       - name: Build release executable
         run: cargo build --release -p avlt --locked
       - name: Check it runs
@@ -31,7 +42,8 @@ jobs:
           Copy-Item target/release/avlt.exe dist/avlt.exe
           $hash = (Get-FileHash dist/avlt.exe -Algorithm SHA256).Hash.ToLower()
           # sha256sum format: "<hash>  <file>"
-          "$hash  avlt.exe" | Out-File -FilePath dist/avlt.exe.sha256 -Encoding ascii
+          # LF, no BOM
+          [IO.File]::WriteAllText("dist/avlt.exe.sha256", "$hash  avlt.exe`n")
           Get-Content dist/avlt.exe.sha256
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2.2.2
