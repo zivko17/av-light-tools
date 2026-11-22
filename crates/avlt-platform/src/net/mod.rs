@@ -21,7 +21,7 @@ use avlt_core::net::{hosts_in, oui_vendor};
 
 use crate::{Error, Result};
 
-pub use adapters::{active_adapters, adapters, default_adapter, find_adapter};
+pub use adapters::{active_adapters, adapters, default_adapter, find_adapter, setip_adapter};
 pub use http::{public_ip, vendor_online};
 pub use icmp::{ping, sweep};
 pub use neighbors::{hostname, neighbors};

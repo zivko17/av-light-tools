@@ -25,6 +25,42 @@ pub fn find_adapter(name: &str) -> Result<Adapter> {
     pick_default(adapters()?, Some(name))
 }
 
+/// The adapter `net setip` changes.
+///
+/// With `preferred` (from `--iface` or `avlt.toml`), that adapter, as [`find_adapter`].
+/// Otherwise never a guess that could cut the user off: the adapter named `Ethernet` in
+/// any state (SetIP.ps1 default), else the default-route adapter only if it is wired
+/// Ethernet, else `InvalidInput` asking for `--iface`. Wi-Fi is never chosen implicitly.
+pub fn setip_adapter(preferred: Option<&str>) -> Result<Adapter> {
+    pick_setip(adapters()?, preferred)
+}
+
+pub(crate) fn pick_setip(mut all: Vec<Adapter>, preferred: Option<&str>) -> Result<Adapter> {
+    if preferred.is_some() {
+        return pick_default(all, preferred);
+    }
+    if let Some(i) = all
+        .iter()
+        .position(|a| a.name.eq_ignore_ascii_case("Ethernet"))
+    {
+        return Ok(all.swap_remove(i));
+    }
+    let route = all
+        .iter()
+        .filter(|a| is_active(a) && !a.gateways.is_empty())
+        .min_by_key(|a| a.metric);
+    match route {
+        Some(a) if a.kind == AdapterKind::Ethernet => Ok(a.clone()),
+        _ => {
+            let names: Vec<&str> = all.iter().map(|a| a.name.as_str()).collect();
+            Err(Error::InvalidInput(format!(
+                "no adapter named 'Ethernet' and the default route is not on wired Ethernet;                  choose one with --iface (available: {})",
+                names.join(", ")
+            )))
+        }
+    }
+}
+
 /// Up, non-loopback adapters with an IPv4 address, default-route owners first.
 pub fn active_adapters() -> Result<Vec<Adapter>> {
     let mut list: Vec<Adapter> = adapters()?.into_iter().filter(is_active).collect();
@@ -302,6 +338,69 @@ mod tests {
         assert!(matches!(&err, Error::Other(m) if m == "no active network adapter"));
         assert_eq!(err.exit_code(), 1);
         assert!(pick_default(vec![], None).is_err());
+    }
+
+    #[test]
+    fn setip_prefers_ethernet_over_wifi_default_route() {
+        let all = vec![
+            adapter("Wi-Fi", true, Some("10.0.0.5"), Some("10.0.0.1"), 25),
+            adapter("Ethernet", true, Some("192.168.1.99"), None, 5),
+        ];
+        assert_eq!(pick_setip(all, None).unwrap().name, "Ethernet");
+    }
+
+    #[test]
+    fn setip_takes_ethernet_even_when_down() {
+        let all = vec![
+            adapter("Wi-Fi", true, Some("10.0.0.5"), Some("10.0.0.1"), 25),
+            adapter("Ethernet", false, None, None, 5),
+        ];
+        assert_eq!(pick_setip(all, None).unwrap().name, "Ethernet");
+    }
+
+    #[test]
+    fn setip_never_picks_wifi_implicitly() {
+        let all = vec![
+            adapter("Wi-Fi", true, Some("10.0.0.5"), Some("10.0.0.1"), 25),
+            adapter("Ethernet 2", true, Some("192.168.1.99"), None, 5),
+        ];
+        let err = pick_setip(all, None).unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("--iface"), "{msg}");
+        assert!(msg.contains("Wi-Fi") && msg.contains("Ethernet 2"), "{msg}");
+        assert!(pick_setip(vec![], None).is_err());
+    }
+
+    #[test]
+    fn setip_uses_wired_default_route_without_an_ethernet_name() {
+        let all = vec![
+            adapter("Wi-Fi", true, Some("10.0.0.5"), None, 25),
+            adapter(
+                "Ethernet 2",
+                true,
+                Some("192.168.1.5"),
+                Some("192.168.1.1"),
+                5,
+            ),
+        ];
+        assert_eq!(pick_setip(all, None).unwrap().name, "Ethernet 2");
+    }
+
+    #[test]
+    fn setip_explicit_name_wins() {
+        let all = vec![
+            adapter("Wi-Fi", true, Some("10.0.0.5"), Some("10.0.0.1"), 25),
+            adapter("Ethernet", true, None, None, 5),
+        ];
+        assert_eq!(
+            pick_setip(all.clone(), Some("wi-fi")).unwrap().name,
+            "Wi-Fi"
+        );
+        assert!(matches!(
+            pick_setip(all, Some("Nope")),
+            Err(Error::InvalidInput(_))
+        ));
     }
 
     #[test]

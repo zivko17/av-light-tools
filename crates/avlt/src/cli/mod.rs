@@ -3,6 +3,7 @@
 //! Each group (`calc`, `edid`, ...) owns its clap enum and dispatch in its own file.
 
 pub mod calc;
+pub mod confirm;
 pub mod edid;
 pub mod media;
 pub mod ndi;
@@ -13,8 +14,11 @@ pub mod output;
 pub mod sys;
 pub mod util;
 
+use std::io::{self, Write};
+
 use avlt_core::{Error, Result};
 use clap::{Args, Parser, Subcommand};
+use serde::Serialize;
 
 use self::output::Out;
 
@@ -83,4 +87,31 @@ pub fn run(command: Command, out: &Out) -> Result<()> {
         Command::Util(cmd) => util::run(cmd, out),
         Command::Gui => not_implemented(),
     }
+}
+
+/// A plain stdout line for tables and live monitors (nothing with `--json`).
+/// A closed pipe ends the process quietly.
+pub(crate) fn line(out: &Out, s: &str) {
+    if !out.json {
+        raw_line(s);
+    }
+}
+
+/// One compact JSON document on its own stdout line, for live monitors with `--json`
+/// (one line per sample).
+pub(crate) fn json_line<T: Serialize>(value: &T) {
+    match serde_json::to_string(value) {
+        Ok(s) => raw_line(&s),
+        Err(e) => out_err(&format!("cannot serialize result: {e}")),
+    }
+}
+
+fn raw_line(s: &str) {
+    if let Err(e) = writeln!(io::stdout().lock(), "{s}") {
+        output::exit_if_broken_pipe(&e);
+    }
+}
+
+fn out_err(msg: &str) {
+    let _ = writeln!(io::stderr().lock(), "error: {msg}");
 }

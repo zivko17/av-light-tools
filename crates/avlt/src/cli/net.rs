@@ -1,7 +1,7 @@
 //! `avlt net ...`: Network tools (NetTools.ps1, MyIP.ps1, SetIP.ps1, NetMaint).
 
 use std::future::Future;
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -23,10 +23,11 @@ use avlt_platform::admin::require_admin;
 use avlt_platform::net::{self as pnet, PING_TIMEOUT};
 use avlt_platform::process::{self, find_tool};
 use clap::{Args, Subcommand};
-use serde::Serialize;
 use tokio::time::MissedTickBehavior;
 
-use super::output::{Out, exit_if_broken_pipe};
+use super::confirm::confirm;
+use super::output::Out;
+use super::{json_line, line};
 
 /// `avlt net` subcommands.
 #[derive(Debug, Subcommand)]
@@ -212,27 +213,6 @@ fn block_on<F: Future>(fut: F) -> Result<F::Output> {
     let value = rt.block_on(fut);
     rt.shutdown_background();
     Ok(value)
-}
-
-/// A plain stdout line (nothing with `--json`); closed pipes end the process quietly.
-fn line(out: &Out, s: &str) {
-    if !out.json {
-        raw_line(s);
-    }
-}
-
-fn raw_line(s: &str) {
-    if let Err(e) = writeln!(io::stdout().lock(), "{s}") {
-        exit_if_broken_pipe(&e);
-    }
-}
-
-/// One compact JSON document on its own line (live monitors with `--json`).
-fn json_line<T: Serialize>(value: &T) {
-    match serde_json::to_string(value) {
-        Ok(s) => raw_line(&s),
-        Err(e) => eprintln!("error: cannot serialize result: {e}"),
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -930,38 +910,6 @@ fn speedtest(out: &Out) -> Result<()> {
 
 // ---------------------------------------------------------------- system changes
 
-/// Asks `question` on stderr unless `yes`; refuses without a terminal to ask on.
-fn confirm(yes: bool, question: &str) -> Result<()> {
-    let stdin = io::stdin();
-    let interactive = stdin.is_terminal();
-    confirm_with(yes, interactive, stdin.lock(), question)
-}
-
-fn confirm_with(yes: bool, interactive: bool, reader: impl BufRead, question: &str) -> Result<()> {
-    if yes {
-        return Ok(());
-    }
-    if !interactive {
-        return Err(Error::InvalidInput(format!(
-            "{question} needs confirmation: run it in a terminal or pass --yes"
-        )));
-    }
-    let mut err = io::stderr().lock();
-    let _ = write!(err, "{question} [y/N] ");
-    let _ = err.flush();
-    if answered_yes(reader) {
-        Ok(())
-    } else {
-        Err(Error::Other("cancelled".into()))
-    }
-}
-
-fn answered_yes(mut reader: impl BufRead) -> bool {
-    let mut answer = String::new();
-    reader.read_line(&mut answer).is_ok()
-        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
 /// SetIP.ps1 (whole script) / NetMaint IpConfigPage: profile, DHCP or custom address.
 ///
 /// Order: validate the target, require administrator, resolve the adapter, confirm, apply.
@@ -969,7 +917,8 @@ fn setip(args: SetipArgs, out: &Out) -> Result<()> {
     let cfg = config()?;
     let target = parse_ip_target(&args.target, args.gateway.as_deref(), &cfg.ip_profiles)?;
     require_admin()?;
-    let adapter = pnet::default_adapter(args.iface.as_deref().or(cfg.iface.as_deref()))?;
+    // Never the Wi-Fi of the default route by accident: see `setip_adapter`.
+    let adapter = pnet::setip_adapter(args.iface.as_deref().or(cfg.iface.as_deref()))?;
     let name = adapter.name;
     confirm(args.yes, &format!("Set {target} on '{name}'?"))?;
     match target {
@@ -985,29 +934,38 @@ fn setip(args: SetipArgs, out: &Out) -> Result<()> {
     }
     out.ok(&format!("OK -> {target}"));
     // As SetIP.ps1: wait up to 8 s for a DHCP lease, 800 ms after a static change.
+    // The change is done: a failing re-read only leaves the result without addresses.
+    let reread = || pnet::find_adapter(&name).ok();
     let after = if target == IpTarget::Dhcp {
-        let mut after = pnet::find_adapter(&name)?;
+        let mut after = reread();
         for _ in 0..8 {
             if after
-                .primary_ipv4()
+                .as_ref()
+                .and_then(Adapter::primary_ipv4)
                 .is_some_and(|c| !c.address.is_link_local())
             {
                 break;
             }
             std::thread::sleep(Duration::from_secs(1));
-            after = pnet::find_adapter(&name)?;
+            after = reread();
         }
         after
     } else {
         std::thread::sleep(Duration::from_millis(800));
-        pnet::find_adapter(&name)?
+        reread()
     };
+    if after.is_none() {
+        out.warn(&format!("could not read the new configuration of '{name}'"));
+    }
     let result = IpChange {
-        adapter: name,
         applied: target,
-        ipv4: after.ipv4,
-        gateways: after.gateways,
-        dhcp: after.dhcp,
+        ipv4: after.as_ref().map(|a| a.ipv4.clone()).unwrap_or_default(),
+        gateways: after
+            .as_ref()
+            .map(|a| a.gateways.clone())
+            .unwrap_or_default(),
+        dhcp: after.as_ref().is_some_and(|a| a.dhcp),
+        adapter: name,
     };
     out.emit(&result, |r, out| {
         if r.ipv4.is_empty() {
@@ -1064,32 +1022,6 @@ fn flushdns(out: &Out) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn confirmation_answers() {
-        for (input, expected) in [
-            ("y\n", true),
-            ("YES\r\n", true),
-            (" y ", true),
-            ("n\n", false),
-            ("\n", false),
-            ("", false),
-            ("yep\n", false),
-        ] {
-            assert_eq!(answered_yes(input.as_bytes()), expected, "{input:?}");
-        }
-    }
-
-    #[test]
-    fn confirmation_paths() {
-        assert!(confirm_with(true, false, "".as_bytes(), "Q?").is_ok());
-        let err = confirm_with(false, false, "y\n".as_bytes(), "Q?").unwrap_err();
-        assert!(matches!(err, Error::InvalidInput(_)), "{err:?}");
-        assert!(err.to_string().contains("--yes"), "{err}");
-        assert!(confirm_with(false, true, "y\n".as_bytes(), "Q?").is_ok());
-        let err = confirm_with(false, true, "n\n".as_bytes(), "Q?").unwrap_err();
-        assert_eq!(err.to_string(), "cancelled");
-    }
 
     #[test]
     fn host_lists_split_and_dedupe() {
