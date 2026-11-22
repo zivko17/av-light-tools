@@ -27,7 +27,7 @@ To verify it:
 ### Use
 
 ```powershell
-avlt --help                       # groups: calc, edid, net, sys, util, media, ndi, gui
+avlt --help                       # groups: calc, edid, net, sys, media, ndi, util, gui
 avlt calc subnet 192.168.1.0/24
 avlt edid list
 avlt net scan
@@ -55,7 +55,8 @@ avlt net info --json              # every command can print JSON instead of text
   | 5 | Not supported on this system |
 
 - **Safety.** Commands that change the system (`net setip`, `net reset-nic`,
-  `sys killp`, `sys cleanup`, `sys monitors-arrange`) ask for confirmation
+  `sys killp`, `sys cleanup`, `sys monitors-arrange`, `sys services-audio
+  --restart`) ask for confirmation
   unless you pass `--yes`, and the ones that need administrator rights check
   that first. `sys killp` never kills protected system processes (svchost,
   csrss, explorer...) unless you pass `--include-critical` **and** confirm

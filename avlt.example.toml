@@ -7,7 +7,8 @@
 # Having an avlt.toml (or an _OUTPUT folder) next to the exe also turns on
 # portable mode: output goes to <exe folder>\_OUTPUT.
 
-# Network adapter used by `avlt net setip` and `avlt net reset-nic`.
+# Default network adapter for `avlt net info`, `net speed`, `net setip`,
+# `net reset-nic` and the GUI.
 # Default: the adapter that owns the default route.
 # iface = "Ethernet 2"
 
