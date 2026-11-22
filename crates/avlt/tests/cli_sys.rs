@@ -183,7 +183,8 @@ mod windows {
     }
 
     /// A private copy of ping.exe running under a chosen name; killed on drop so a failed
-    /// assertion leaves nothing behind. The only processes these tests may kill.
+    /// assertion leaves nothing behind. Every killp invocation below passes
+    /// `--pid <this child>`, so nothing but the test's own child can ever match.
     struct Victim {
         child: std::process::Child,
         _dir: tempfile::TempDir,
@@ -203,6 +204,10 @@ mod windows {
             Victim { child, _dir: dir }
         }
 
+        fn pid(&self) -> String {
+            self.child.id().to_string()
+        }
+
         fn alive(&mut self) -> bool {
             self.child.try_wait().unwrap().is_none()
         }
@@ -215,32 +220,51 @@ mod windows {
         }
     }
 
-    /// A fake process named `System` (critical list) — the real System process cannot
-    /// be terminated by anyone, so even a regression could only hit the fake.
+    /// A name unique to this test run (test process id + a per-call counter), so suites
+    /// running concurrently in other worktrees never see each other's victims.
+    fn unique_name(base: &str) -> String {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        format!("{base}{}x{n}", std::process::id())
+    }
+
+    /// The matched list must be exactly the test's child.
+    fn assert_only(v: &Value, pid: u32) {
+        let matched = v["matched"].as_array().unwrap();
+        assert_eq!(matched.len(), 1, "{v}");
+        assert_eq!(matched[0]["pid"], pid, "{v}");
+        for r in v["results"].as_array().unwrap() {
+            assert_eq!(r["pid"], pid, "{v}");
+        }
+    }
+
+    /// A fake process with a critical name, restricted by `--pid` to that fake: the real
+    /// System process can never be matched.
     #[test]
     fn killp_never_kills_critical_processes_with_yes() {
         let mut fake = Victim::spawn("System");
-        let pid = fake.child.id();
+        let pid = fake.pid();
 
-        let o = avlt(&["sys", "killp", "System", "--yes", "--json"]);
+        let o = avlt(&["sys", "killp", "System", "--pid", &pid, "--yes", "--json"]);
         assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
         let v = json(&o);
-        let ours = v["results"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["pid"] == pid)
-            .unwrap_or_else(|| panic!("fake not reported: {v}"));
-        assert_eq!(ours["killed"], false, "{v}");
-        assert_eq!(ours["skipped"], true, "{v}");
+        assert_only(&v, fake.child.id());
+        assert_eq!(v["results"][0]["killed"], false, "{v}");
+        assert_eq!(v["results"][0]["skipped"], true, "{v}");
         assert!(fake.alive(), "critical process killed with --yes");
         assert!(stderr(&o).contains("--include-critical"), "{}", stderr(&o));
 
-        // (No --wildcard --yes here: a partial pattern would also match real processes;
-        // the wildcard split is covered by avlt_core::sys::process::kill_plan tests.)
-
         // --include-critical needs a terminal y/N answer; --yes never satisfies it.
-        let o = avlt(&["sys", "killp", "System", "--include-critical", "--yes"]);
+        let o = avlt(&[
+            "sys",
+            "killp",
+            "System",
+            "--pid",
+            &pid,
+            "--include-critical",
+            "--yes",
+        ]);
         assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
         assert!(stderr(&o).contains("terminal"), "{}", stderr(&o));
         assert!(
@@ -251,40 +275,61 @@ mod windows {
 
     #[test]
     fn killp_refuses_without_yes_then_kills_with_yes() {
-        let mut victim = Victim::spawn("avltclivictim");
-        let child = &mut victim.child;
+        let name = unique_name("avltclivictim");
+        let mut victim = Victim::spawn(&name);
+        let pid = victim.pid();
 
-        let o = avlt(&["sys", "killp", "avltclivictim"]);
+        let o = avlt(&["sys", "killp", &name, "--pid", &pid]);
         assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
         assert!(stderr(&o).contains("--yes"), "{}", stderr(&o));
-        assert!(child.try_wait().unwrap().is_none(), "killed without --yes");
+        assert!(victim.alive(), "killed without --yes");
 
         // Exact match by default: a partial name matches nothing.
-        let o = avlt(&["sys", "killp", "avltcliv", "--yes"]);
+        let partial = &name[..name.len() - 2];
+        let o = avlt(&["sys", "killp", partial, "--pid", &pid, "--yes"]);
         assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
         assert!(stderr(&o).contains("No process found"), "{}", stderr(&o));
-        assert!(child.try_wait().unwrap().is_none());
+        assert!(victim.alive());
 
-        let o = avlt(&["sys", "killp", "avltcliv", "--wildcard", "--yes", "--json"]);
+        // A PID that is not the named process matches nothing either.
+        let o = avlt(&["sys", "killp", &name, "--pid", "1", "--yes"]);
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        assert!(stderr(&o).contains("No process found"), "{}", stderr(&o));
+        assert!(victim.alive());
+
+        let o = avlt(&[
+            "sys",
+            "killp",
+            partial,
+            "--wildcard",
+            "--pid",
+            &pid,
+            "--yes",
+            "--json",
+        ]);
         assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
         let v = json(&o);
+        assert_only(&v, victim.child.id());
         assert_eq!(v["results"][0]["killed"], true, "{v}");
-        assert_eq!(v["results"][0]["pid"], child.id());
-        assert_eq!(v["matched"].as_array().unwrap().len(), 1);
-        assert!(!child.wait().unwrap().success());
+        assert!(!victim.child.wait().unwrap().success());
     }
 
     #[test]
     fn killp_lists_critical_processes_as_skipped() {
-        // No --yes: even a regression would stop at the confirmation (no terminal).
-        let o = avlt(&["sys", "killp", "explorer"]);
+        let mut fake = Victim::spawn("explorer");
+        let pid = fake.pid();
+        // No --yes, and --pid restricts the match to the fake.
+        let o = avlt(&["sys", "killp", "explorer", "--pid", &pid]);
         assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
-        // explorer may not run on a CI runner.
-        if !stderr(&o).contains("No process found") {
-            assert!(stdout(&o).contains("<- CRITICAL"), "{}", stdout(&o));
-            assert!(stdout(&o).contains("Skipped"), "{}", stdout(&o));
-            assert!(stderr(&o).contains("--include-critical"), "{}", stderr(&o));
-        }
+        assert!(stdout(&o).contains("<- CRITICAL"), "{}", stdout(&o));
+        assert!(stdout(&o).contains("Skipped"), "{}", stdout(&o));
+        assert!(stderr(&o).contains("--include-critical"), "{}", stderr(&o));
+        let o = avlt(&["sys", "killp", "explorer", "--pid", &pid, "--json"]);
+        assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+        let v = json(&o);
+        assert_only(&v, fake.child.id());
+        assert_eq!(v["results"][0]["skipped"], true, "{v}");
+        assert!(fake.alive());
     }
 
     #[test]

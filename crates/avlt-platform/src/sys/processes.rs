@@ -241,7 +241,9 @@ mod tests {
 
         // A private copy of a harmless program, so no other process shares its name.
         let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("avltkilltest.exe");
+        // Unique per test run, so concurrent suites never see each other's child.
+        let name = format!("avltkilltest{}", std::process::id());
+        let exe = dir.path().join(format!("{name}.exe"));
         let system = std::env::var("SystemRoot").unwrap();
         std::fs::copy(format!(r"{system}\System32\ping.exe"), &exe).unwrap();
         let mut child = Guard(
@@ -253,13 +255,15 @@ mod tests {
         );
         let pid = child.0.id();
 
-        let found = find_processes("AVLTKILLTEST", false).unwrap();
+        let found = find_processes(&name.to_uppercase(), false).unwrap();
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].pid, pid);
-        assert_eq!(found[0].name, "avltkilltest");
+        assert_eq!(found[0].name, name);
         assert!(!found[0].critical);
-        assert!(find_processes("avltkill", false).unwrap().is_empty());
-        assert_eq!(find_processes("avltkill", true).unwrap().len(), 1);
+        let partial = &name[..name.len() - 1];
+        assert!(find_processes(partial, false).unwrap().is_empty());
+        let wild = find_processes(partial, true).unwrap();
+        assert!(wild.iter().any(|p| p.pid == pid), "{wild:?}");
 
         kill(pid).unwrap();
         let status = child.0.wait().unwrap();
