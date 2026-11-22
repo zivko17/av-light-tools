@@ -1,9 +1,7 @@
 //! `avlt net ...`: Network tools (NetTools.ps1, MyIP.ps1, SetIP.ps1, NetMaint).
 
-use std::future::Future;
 use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
-use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use avlt_core::net::COMMON_PORTS;
@@ -21,9 +19,9 @@ use avlt_platform::admin::require_admin;
 use avlt_platform::net::{self as pnet, PING_TIMEOUT};
 use avlt_platform::process::{self, find_tool};
 use clap::{Args, Subcommand};
-use tokio::time::MissedTickBehavior;
 
 use super::confirm::confirm;
+use super::live::{Colour, Ticker, block_on, paint};
 use super::output::Out;
 use super::{json_line, line};
 
@@ -191,39 +189,6 @@ pub fn run(cmd: NetCmd, out: &Out) -> Result<()> {
 fn resolve_adapter(explicit: Option<&str>) -> Result<Adapter> {
     let cfg = super::env::load_config()?;
     pnet::default_adapter(explicit.or(cfg.iface.as_deref()))
-}
-
-/// Runs `fut` on a fresh multi-threaded Tokio runtime. Blocking lookups still running
-/// at the end (slow reverse DNS) are abandoned instead of delaying exit.
-fn block_on<F: Future>(fut: F) -> Result<F::Output> {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let value = rt.block_on(fut);
-    rt.shutdown_background();
-    Ok(value)
-}
-
-#[derive(Clone, Copy)]
-enum Colour {
-    Green,
-    Yellow,
-    Red,
-    Dim,
-}
-
-/// `s` in `colour` when stdout takes colour.
-fn paint(out: &Out, colour: Colour, s: &str) -> String {
-    if !out.color {
-        return s.to_string();
-    }
-    let code = match colour {
-        Colour::Green => "32",
-        Colour::Yellow => "33",
-        Colour::Red => "31",
-        Colour::Dim => "2",
-    };
-    format!("\x1b[{code}m{s}\x1b[0m")
 }
 
 fn class_colour(class: LinkClass) -> Colour {
@@ -557,50 +522,6 @@ fn endpoint(addr: std::net::IpAddr, port: u16) -> String {
 }
 
 // ---------------------------------------------------------------- live monitors
-
-/// Paces a live monitor: one step per second until Ctrl+C or the sample limit.
-struct Ticker {
-    interval: tokio::time::Interval,
-    stop: Pin<Box<dyn Future<Output = ()> + Send>>,
-    remaining: Option<u64>,
-}
-
-impl Ticker {
-    /// `now`: first step immediately; otherwise after one second (rate monitors).
-    /// Must be created inside the runtime.
-    fn new(count: Option<u64>, now: bool) -> Ticker {
-        let period = Duration::from_secs(1);
-        let start = tokio::time::Instant::now() + if now { Duration::ZERO } else { period };
-        let mut interval = tokio::time::interval_at(start, period);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        Ticker {
-            interval,
-            // If Ctrl+C cannot be hooked the monitor just runs until killed.
-            stop: Box::pin(async {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    std::future::pending::<()>().await;
-                }
-            }),
-            remaining: count,
-        }
-    }
-
-    /// Waits for the next step; `false` once the monitor must stop.
-    async fn next(&mut self) -> bool {
-        if self.remaining == Some(0) {
-            return false;
-        }
-        tokio::select! {
-            biased;
-            () = &mut self.stop => return false,
-            _ = self.interval.tick() => {}
-        }
-        if let Some(n) = &mut self.remaining {
-            *n -= 1;
-        }
-        true
-    }
-}
 
 /// Splits `a,b c` style host lists, dropping blanks and duplicates (order kept).
 fn split_hosts(args: &[String]) -> Vec<String> {
