@@ -25,7 +25,7 @@ mod imp {
     use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToBSTR};
     use windows::Win32::System::Com::{
         CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
-        STGM_READ,
+        CoUninitialize, STGM_READ,
     };
 
     use crate::{Error, Result};
@@ -88,11 +88,33 @@ mod imp {
         }
     }
 
+    /// Balances a successful `CoInitializeEx` (S_OK or S_FALSE) with `CoUninitialize`.
+    /// Declared before any interface so it drops after all of them.
+    struct ComGuard(bool);
+
+    impl ComGuard {
+        fn init() -> ComGuard {
+            // SAFETY: plain call; RPC_E_CHANGED_MODE (another apartment model already
+            // set on this thread) is fine for Core Audio and must not be uninitialised.
+            let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            ComGuard(hr.is_ok())
+        }
+    }
+
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                // SAFETY: pairs the successful CoInitializeEx of `init`.
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
     pub fn audio_devices() -> Result<AudioReport> {
-        // SAFETY: COM is initialised for this thread (already-initialised modes are
-        // fine); every interface is released when it goes out of scope.
+        let _com = ComGuard::init();
+        // SAFETY: COM is initialised for this thread by `_com`; every interface below is
+        // released when it goes out of scope, before `_com`.
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                     .map_err(fail("device enumerator"))?;
