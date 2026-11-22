@@ -6,23 +6,19 @@
 //! portable). An existing file is never overwritten: the name gets `_1`, `_2`, ...
 //! The interactive `audiotools` menu is not ported; the GUI covers it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 
-use avlt_core::media::{
-    self, Channels, ExtractFormat, JobResult, MediaReport, Preset, SAMPLE_RATES, non_colliding,
-};
+use avlt_core::media::{self, Channels, ExtractFormat, MediaOp, MediaReport, Preset, SAMPLE_RATES};
 use avlt_core::{Error, Result};
+use avlt_platform::media as pmedia;
 use avlt_platform::paths::KnownFolder;
-use avlt_platform::process::{capture, find_tool, output};
 use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::{Args, Subcommand};
 
 use super::env;
 use super::line;
 use super::output::Out;
-
-/// winget package that provides ffmpeg and ffprobe.
-const FFMPEG_WINGET: &str = "Gyan.FFmpeg";
 
 /// `avlt media` subcommands.
 #[derive(Debug, Subcommand)]
@@ -139,24 +135,6 @@ pub fn run(cmd: MediaCmd, out: &Out) -> Result<()> {
     }
 }
 
-/// Outcome of the ffmpeg run(s) for one file: exit code and the program's text.
-type Run = (i32, String);
-
-/// Runs ffmpeg for `(ffmpeg, input, output, out)`.
-type RunFn<'a> = dyn Fn(&Path, &Path, &Path, &Out) -> Result<Run> + 'a;
-
-/// What one `media` operation does with each input file.
-struct Batch<'a> {
-    /// Operation name for the report and heading.
-    operation: &'a str,
-    /// Heading shown before the files (`Converting 3 file(s) to MP3-320`).
-    action: String,
-    /// Bare output file name for an input.
-    name_for: Box<dyn Fn(&Path) -> PathBuf + 'a>,
-    /// Runs ffmpeg for `(ffmpeg, input, output)`.
-    run: Box<RunFn<'a>>,
-}
-
 fn convert(a: &ConvertArgs, out: &Out) -> Result<()> {
     let preset: Preset = a.preset.parse()?;
     let channels = a
@@ -164,37 +142,16 @@ fn convert(a: &ConvertArgs, out: &Out) -> Result<()> {
         .as_deref()
         .map(str::parse::<Channels>)
         .transpose()?;
-    let rate = a.sample_rate;
-    run_batch(&a.files, out, |n| Batch {
-        operation: "convert",
-        action: format!("Converting {n} file(s) to {}", preset.label()),
-        name_for: Box::new(move |i| media::suffixed_name(i, preset.label(), Some(preset.ext()))),
-        run: Box::new(move |ff, i, o, _| {
-            let args = media::convert_args_with(i, o, preset, rate, channels);
-            run_ffmpeg(ff, &args)
-        }),
-    })
+    let op = MediaOp::Convert {
+        preset,
+        sample_rate: a.sample_rate,
+        channels,
+    };
+    run_batch(&a.files, out, &op)
 }
 
 fn normalize(a: &InputArgs, out: &Out) -> Result<()> {
-    run_batch(a, out, |n| Batch {
-        operation: "normalize",
-        action: format!("Normalizing {n} file(s) to -23 LUFS (two-pass)"),
-        name_for: Box::new(|i| media::suffixed_name(i, "norm", Some(media::normalize_ext(i)))),
-        run: Box::new(|ff, i, o, out| {
-            // Pass 1: measure. Pass 2: apply the measured values; if the measurement
-            // fails (e.g. silence), fall back to a single pass like the original.
-            let (_, text) = run_ffmpeg(ff, &media::normalize_pass1_args(i))?;
-            let args = match media::parse_loudnorm_json(&text) {
-                Ok(m) => media::normalize_pass2_args(i, o, &m),
-                Err(_) => {
-                    out.warn("measurement failed, single-pass fallback");
-                    media::normalize_single_pass_args(i, o)
-                }
-            };
-            run_ffmpeg(ff, &args)
-        }),
-    })
+    run_batch(a, out, &MediaOp::Normalize)
 }
 
 fn trim(a: &TrimArgs, out: &Out) -> Result<()> {
@@ -203,25 +160,16 @@ fn trim(a: &TrimArgs, out: &Out) -> Result<()> {
             "trim takes a single file, not a folder".into(),
         ));
     }
-    let (start, end) = (a.start.clone(), a.end.clone());
-    run_batch(&a.files, out, |n| Batch {
-        operation: "trim",
-        action: format!("Trimming {n} file(s)"),
-        name_for: Box::new(|i| media::suffixed_name(i, "trim", None)),
-        run: Box::new(move |ff, i, o, _| {
-            run_ffmpeg(ff, &media::trim_args(i, o, &start, end.as_deref()))
-        }),
-    })
+    let op = MediaOp::Trim {
+        start: a.start.clone(),
+        end: a.end.clone(),
+    };
+    run_batch(&a.files, out, &op)
 }
 
 fn extract(a: &ExtractArgs, out: &Out) -> Result<()> {
     let format: ExtractFormat = a.format.parse()?;
-    run_batch(&a.files, out, |n| Batch {
-        operation: "extract",
-        action: format!("Extracting audio from {n} file(s)"),
-        name_for: Box::new(move |i| media::suffixed_name(i, "audio", Some(format.ext()))),
-        run: Box::new(move |ff, i, o, _| run_ffmpeg(ff, &media::extract_args(i, o, format))),
-    })
+    run_batch(&a.files, out, &MediaOp::Extract(format))
 }
 
 fn resample(a: &ResampleArgs, out: &Out) -> Result<()> {
@@ -231,37 +179,18 @@ fn resample(a: &ResampleArgs, out: &Out) -> Result<()> {
         .ok()
         .filter(|r| SAMPLE_RATES.contains(r))
         .ok_or_else(|| Error::InvalidInput(format!("unsupported sample rate '{}'", a.rate)))?;
-    run_batch(&a.files, out, |n| Batch {
-        operation: "resample",
-        action: format!("Resampling {n} file(s) to {rate} Hz"),
-        name_for: Box::new(move |i| media::suffixed_name(i, &rate.to_string(), None)),
-        run: Box::new(move |ff, i, o, _| run_ffmpeg(ff, &media::resample_args(i, o, rate))),
-    })
+    run_batch(&a.files, out, &MediaOp::Resample(rate))
 }
 
 fn channels(a: &ChannelsArgs, out: &Out) -> Result<()> {
     let mode: Channels = a.mode.parse()?;
-    run_batch(&a.files, out, |n| Batch {
-        operation: "channels",
-        action: format!("Converting {n} file(s) to {}", mode.name()),
-        name_for: Box::new(move |i| media::suffixed_name(i, mode.name(), None)),
-        run: Box::new(move |ff, i, o, _| run_ffmpeg(ff, &media::channels_args(i, o, mode))),
-    })
-}
-
-fn run_ffmpeg(ffmpeg: &Path, args: &[String]) -> Result<Run> {
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    output(ffmpeg, &refs)
+    run_batch(&a.files, out, &MediaOp::Channels(mode))
 }
 
 /// Shared flow: find ffmpeg (exit 3 with the winget hint if missing), expand the input,
 /// pick and create the output folder, then run each file and report.
-fn run_batch<'a>(
-    files: &InputArgs,
-    out: &Out,
-    make: impl FnOnce(usize) -> Batch<'a>,
-) -> Result<()> {
-    let ffmpeg = find_tool("ffmpeg", FFMPEG_WINGET)?;
+fn run_batch(files: &InputArgs, out: &Out, op: &MediaOp) -> Result<()> {
+    let ffmpeg = pmedia::ffmpeg()?;
     let inputs = media::collect_inputs(&files.input)?;
     let dir = match &files.out {
         Some(d) => d.clone(),
@@ -269,45 +198,18 @@ fn run_batch<'a>(
     };
     std::fs::create_dir_all(&dir)?;
 
-    let batch = make(inputs.len());
-    out.title(&format!("{} -> {}", batch.action, dir.display()));
+    out.title(&format!("{} -> {}", op.action(inputs.len()), dir.display()));
     line(out, "");
 
     let total = inputs.len();
+    let never = AtomicBool::new(false);
     let mut results = Vec::with_capacity(total);
     for (i, input) in inputs.iter().enumerate() {
         let name = input
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         line(out, &format!("  [{}/{total}] {name}", i + 1));
-        let target = non_colliding(&dir.join((batch.name_for)(input)));
-        let existed = target.exists();
-        let result = match (batch.run)(&ffmpeg, input, &target, out) {
-            Ok((0, _)) if target.is_file() => JobResult {
-                input: input.clone(),
-                size_bytes: std::fs::metadata(&target).ok().map(|m| m.len()),
-                output: Some(target.clone()),
-                ok: true,
-                error: None,
-            },
-            Ok((code, text)) => {
-                discard_empty_partial(&target, existed, &text);
-                JobResult {
-                    input: input.clone(),
-                    output: None,
-                    ok: false,
-                    size_bytes: None,
-                    error: Some(failure_reason(code, &text)),
-                }
-            }
-            Err(e) => JobResult {
-                input: input.clone(),
-                output: None,
-                ok: false,
-                size_bytes: None,
-                error: Some(e.to_string()),
-            },
-        };
+        let result = pmedia::run_job(&ffmpeg, op, input, &dir, &never, &mut |w| out.warn(w));
         match (&result.output, &result.error) {
             (Some(path), _) => out.ok(&format!(
                 "        OK -> {}  ({})",
@@ -325,7 +227,7 @@ fn run_batch<'a>(
         results.push(result);
     }
 
-    let report = MediaReport::new(batch.operation, &dir, results);
+    let report = MediaReport::new(op.operation(), &dir, results);
     out.emit(&report, |r, out| {
         line(out, "");
         out.title(&format!("Done: {} ok, {} failed", r.ok, r.failed));
@@ -338,32 +240,6 @@ fn run_batch<'a>(
         )));
     }
     Ok(())
-}
-
-/// Removes the empty file ffmpeg leaves behind after a failed run. Never touches a file
-/// that existed before the run or one ffmpeg refused to overwrite.
-fn discard_empty_partial(target: &Path, existed: bool, text: &str) {
-    if existed || text.contains("already exists") {
-        return;
-    }
-    if std::fs::metadata(target).is_ok_and(|m| m.len() == 0) {
-        let _ = std::fs::remove_file(target);
-    }
-}
-
-/// The last meaningful lines of ffmpeg's output, which carry the actual error.
-fn failure_reason(code: i32, text: &str) -> String {
-    let tail: Vec<&str> = text
-        .split(['\r', '\n'])
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    let tail = &tail[tail.len().saturating_sub(2)..];
-    if tail.is_empty() {
-        format!("ffmpeg exited with code {code}")
-    } else {
-        format!("ffmpeg exited with code {code}: {}", tail.join(" | "))
-    }
 }
 
 /// `1.5 MB` (MiB, one decimal) as `Get-Item ... / 1MB` showed it.
@@ -384,21 +260,7 @@ fn format_duration(seconds: f64) -> String {
 }
 
 fn probe(a: &ProbeArgs, out: &Out) -> Result<()> {
-    let ffprobe = find_tool("ffprobe", FFMPEG_WINGET)?;
-    let file = media::strip_quotes(&a.file);
-    if !file.exists() {
-        return Err(Error::InvalidInput(format!(
-            "file not found: {}",
-            file.display()
-        )));
-    }
-    let args = media::probe_args(&file);
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let json = capture(&ffprobe, &refs)?;
-    if json.trim().is_empty() {
-        return Err(Error::Other("ffprobe returned no data".into()));
-    }
-    let info = media::parse_probe(&file.to_string_lossy(), &json)?;
+    let info = pmedia::probe(&a.file)?;
     out.emit(&info, |p, out| {
         out.title("=== AUDIO PROBE ===");
         out.field("File", &p.file);
@@ -454,32 +316,5 @@ mod tests {
     fn sizes_use_mebibytes() {
         assert_eq!(format_size(0), "0.0 MB");
         assert_eq!(format_size(1_572_864), "1.5 MB");
-    }
-
-    #[test]
-    fn failure_reason_keeps_the_last_lines() {
-        let text = "banner\r\nInput #0\nbad.wav: Invalid data found when processing input\n";
-        assert_eq!(
-            failure_reason(1, text),
-            "ffmpeg exited with code 1: Input #0 | bad.wav: Invalid data found when processing input"
-        );
-        assert_eq!(failure_reason(5, "  \n"), "ffmpeg exited with code 5");
-    }
-
-    #[test]
-    fn partial_output_is_removed_only_when_empty_and_ours() {
-        let dir = tempfile::tempdir().unwrap();
-        let empty = dir.path().join("empty é.mp3");
-        std::fs::write(&empty, b"").unwrap();
-        discard_empty_partial(&empty, true, "");
-        assert!(empty.exists(), "pre-existing file must stay");
-        discard_empty_partial(&empty, false, "File 'x' already exists. Exiting.");
-        assert!(empty.exists(), "refused overwrite must stay");
-        discard_empty_partial(&empty, false, "boom");
-        assert!(!empty.exists());
-        let full = dir.path().join("full.mp3");
-        std::fs::write(&full, b"data").unwrap();
-        discard_empty_partial(&full, false, "boom");
-        assert!(full.exists());
     }
 }

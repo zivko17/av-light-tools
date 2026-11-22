@@ -4,6 +4,7 @@
 //! and uses the parsers for what ffmpeg / ffprobe print.
 
 pub mod ffargs;
+pub mod op;
 pub mod paths;
 pub mod presets;
 
@@ -18,6 +19,7 @@ pub use ffargs::{
     normalize_pass1_args, normalize_pass2_args, normalize_single_pass_args, probe_args,
     resample_args, suffixed_name, trim_args,
 };
+pub use op::{MediaOp, failure_reason};
 pub use paths::{non_colliding, write_new};
 pub use presets::{Channels, ExtractFormat, Preset, SAMPLE_RATES};
 
