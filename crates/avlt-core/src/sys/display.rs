@@ -13,10 +13,9 @@ pub struct SourceMode {
     pub refresh_denominator: u32,
 }
 
-/// Monitors.ps1 "REFRESH RATE": the best listed mode, i.e. the largest resolution at its
-/// highest refresh rate (rounded to whole hertz). Monitors.ps1 compared raw refresh
-/// numerators, which come in different scales per mode, and showed e.g. 800x600; and
-/// legacy modes such as 1280x1024 @ 75 Hz must not beat the native resolution.
+/// Monitors.ps1 "REFRESH RATE": the listed mode with the highest refresh rate, computed
+/// as numerator / denominator and rounded to whole hertz, the larger resolution on a tie.
+/// Monitors.ps1 sorted by the raw numerator, which comes in different scales per mode.
 pub fn best_source_mode(modes: &[SourceMode]) -> Option<DisplayMode> {
     modes
         .iter()
@@ -27,7 +26,7 @@ pub fn best_source_mode(modes: &[SourceMode]) -> Option<DisplayMode> {
             refresh_hz: (f64::from(m.refresh_numerator) / f64::from(m.refresh_denominator)).round()
                 as u32,
         })
-        .max_by_key(|m| (u64::from(m.width) * u64::from(m.height), m.refresh_hz))
+        .max_by_key(|m| (m.refresh_hz, u64::from(m.width) * u64::from(m.height)))
 }
 
 /// Distinct resolutions, widest first (MonitorsArrange.ps1 step 2), then tallest first.
@@ -131,14 +130,17 @@ mod tests {
     }
 
     #[test]
-    fn best_source_mode_is_the_native_mode() {
-        // Numerators come in different scales: 60317/1000 Hz must not beat 60/1 Hz at a
-        // larger resolution (both round to 60 Hz; the larger mode wins the tie).
+    fn best_source_mode_is_the_highest_refresh_rate() {
+        // Numerators come in different scales: compare the computed rate (60317/1000 and
+        // 60/1 both display as 60 Hz; the larger mode wins the tie).
         let modes = [sm(800, 600, 60_317, 1000), sm(1920, 1080, 60, 1)];
         assert_eq!(best_source_mode(&modes), Some(m(1920, 1080, 60)));
-        // A faster legacy mode does not beat the native resolution.
+        // Monitors.ps1 "REFRESH RATE": the highest rate wins, even at a smaller size.
         let modes = [sm(1920, 1080, 60, 1), sm(1280, 1024, 75_000, 1000)];
-        assert_eq!(best_source_mode(&modes), Some(m(1920, 1080, 60)));
+        assert_eq!(best_source_mode(&modes), Some(m(1280, 1024, 75)));
+        // The raw numerator alone (the script's sort) would pick 120_000/2000 = 60 Hz.
+        let modes = [sm(1920, 1080, 120_000, 2000), sm(1920, 1080, 75, 1)];
+        assert_eq!(best_source_mode(&modes), Some(m(1920, 1080, 75)));
         let modes = [sm(1920, 1080, 60, 1), sm(1920, 1080, 143_998, 1000)];
         assert_eq!(best_source_mode(&modes), Some(m(1920, 1080, 144)));
     }
