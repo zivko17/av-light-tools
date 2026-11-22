@@ -7,6 +7,7 @@ pub mod admin;
 pub mod edid_source;
 pub mod ndi;
 pub mod net;
+pub mod paths;
 pub mod process;
 pub mod registry;
 pub mod sys;

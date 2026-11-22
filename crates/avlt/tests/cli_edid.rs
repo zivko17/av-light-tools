@@ -210,3 +210,10 @@ fn display_sources_are_unsupported_off_windows() {
     let o = avlt(&["edid", "info", "1"]);
     assert_eq!(o.status.code(), Some(5), "{}", stderr(&o));
 }
+
+#[test]
+fn dump_all_with_a_source_is_a_usage_error() {
+    let o = avlt(&["edid", "dump", "--all", "some_out_dir"]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(stderr(&o).contains("cannot be used with"), "{}", stderr(&o));
+}

@@ -9,14 +9,15 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use avlt_core::config::{Config, is_portable};
 use avlt_core::edid::{self, DiffKind, DiffLine, Edid, Finding, Severity, timing::vic_label};
 use avlt_core::media::non_colliding;
 use avlt_core::{Error, Result};
 use avlt_platform::edid_source::{self, DisplayDevice, EdidSource};
+use avlt_platform::paths::KnownFolder;
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
+use super::env;
 use super::output::{Out, exit_if_broken_pipe};
 
 /// `avlt edid` subcommands.
@@ -82,7 +83,7 @@ pub struct DiffArgs {
 #[derive(Debug, Args)]
 pub struct DumpArgs {
     /// Display number or .bin path
-    #[arg(default_value = "1")]
+    #[arg(default_value = "1", conflicts_with = "all")]
     pub source: String,
     /// Output folder (default: <output dir>/EDID)
     pub dir: Option<PathBuf>,
@@ -775,20 +776,14 @@ fn print_diff(v: &DiffOut, all_bytes: bool, out: &Out) {
 //  edid dump
 // ------------------------------------------------------------
 
-/// One file written by `edid dump`.
+/// One file written (or failed) by `edid dump`.
 #[derive(Debug, Serialize)]
 struct DumpOut {
     source: String,
-    path: PathBuf,
+    path: Option<PathBuf>,
     bytes: usize,
-}
-
-/// `<output dir>/EDID`, from `avlt.toml` / portable mode next to the executable.
-fn default_dump_dir() -> Result<PathBuf> {
-    let exe = std::env::current_exe()?;
-    let exe_dir = exe.parent().unwrap_or(Path::new("."));
-    let cfg = Config::load(exe_dir)?;
-    Ok(cfg.output_dir(exe_dir, is_portable(exe_dir)).join("EDID"))
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 /// `<MFG>_<model>[_out<n>].bin`, with anything but word characters, `-` and `.` as `_`.
@@ -839,6 +834,30 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     }
 }
 
+/// Writes every target into `dir`. A failed write is reported and does not stop the rest;
+/// returns the per-file results and the number of failures.
+fn write_all(targets: &[Resolved], dir: &Path, out: &Out) -> (Vec<DumpOut>, usize) {
+    let mut written = Vec::new();
+    let mut failed = 0usize;
+    for t in targets {
+        let (path, error) = match write_new(&dir.join(dump_file_name(t)), &t.edid.raw) {
+            Ok(p) => (Some(p), None),
+            Err(e) => {
+                failed += 1;
+                out.warn(&format!("{}: {e}", t.name));
+                (None, Some(e.to_string()))
+            }
+        };
+        written.push(DumpOut {
+            source: t.name.clone(),
+            path,
+            bytes: t.edid.raw.len(),
+            error,
+        });
+    }
+    (written, failed)
+}
+
 fn dump(a: &DumpArgs, out: &Out) -> Result<()> {
     let targets = if a.all {
         all_displays(a.remembered)?
@@ -847,19 +866,11 @@ fn dump(a: &DumpArgs, out: &Out) -> Result<()> {
     };
     let dir = match &a.dir {
         Some(d) => d.clone(),
-        None => default_dump_dir()?,
+        None => env::output_dir(KnownFolder::Documents)?.join("EDID"),
     };
     std::fs::create_dir_all(&dir)?;
 
-    let mut written = Vec::new();
-    for t in &targets {
-        let path = write_new(&dir.join(dump_file_name(t)), &t.edid.raw)?;
-        written.push(DumpOut {
-            source: t.name.clone(),
-            path,
-            bytes: t.edid.raw.len(),
-        });
-    }
+    let (written, failed) = write_all(&targets, &dir, out);
 
     out.emit(&written, |written, out| {
         out.title("=== EDID DUMP ===");
@@ -867,16 +878,24 @@ fn dump(a: &DumpArgs, out: &Out) -> Result<()> {
             out.warn("No displays with an EDID found.");
         }
         for w in written {
-            out.ok(&format!(
-                "  {:<14} -> {}  ({} bytes)",
-                w.source,
-                w.path.display(),
-                w.bytes
-            ));
+            if let Some(path) = &w.path {
+                out.ok(&format!(
+                    "  {:<14} -> {}  ({} bytes)",
+                    w.source,
+                    path.display(),
+                    w.bytes
+                ));
+            }
         }
         line("");
         line("  Load these in CRU / AW EDID Editor, or push them to a matrix or EDID emulator.");
     });
+    if failed > 0 {
+        return Err(Error::Other(format!(
+            "{failed} of {} EDID dumps failed",
+            targets.len()
+        )));
+    }
     Ok(())
 }
 
@@ -899,6 +918,24 @@ mod tests {
             dump_file_name(&resolved(&[], Some(2))),
             "UNKNOWN_display_out2.bin"
         );
+    }
+
+    #[test]
+    fn dump_all_continues_after_a_failed_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no_such_subdir");
+        let targets = [resolved(&[], Some(1)), resolved(&[], Some(2))];
+        let out = Out::new(true);
+
+        // Every write fails (folder missing): each entry carries an error, none abort the loop.
+        let (res, failed) = write_all(&targets, &missing, &out);
+        assert_eq!(failed, 2);
+        assert_eq!(res.len(), 2);
+        assert!(res.iter().all(|r| r.error.is_some() && r.path.is_none()));
+
+        let (res, failed) = write_all(&targets, dir.path(), &out);
+        assert_eq!(failed, 0);
+        assert!(res.iter().all(|r| r.error.is_none() && r.path.is_some()));
     }
 
     #[test]

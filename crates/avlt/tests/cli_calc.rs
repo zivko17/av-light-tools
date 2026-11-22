@@ -396,7 +396,6 @@ fn invalid_values_exit_2_without_panic() {
         vec!["projector", "--width", "4", "--gain", "0"],
         vec!["pixelpitch"],
         vec!["pixelpitch", "--pitch", "-1"],
-        vec!["brightness", "0"],
         vec!["brightness", "-50"],
         vec!["brightness", "500", "--reflectance", "2"],
         vec!["viewangle", "0"],

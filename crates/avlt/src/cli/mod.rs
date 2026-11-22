@@ -5,6 +5,7 @@
 pub mod calc;
 pub mod confirm;
 pub mod edid;
+pub(crate) mod env;
 pub mod media;
 pub mod ndi;
 pub mod net;

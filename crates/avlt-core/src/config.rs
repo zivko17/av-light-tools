@@ -89,16 +89,18 @@ impl Config {
     /// Folder where avlt writes its output files.
     ///
     /// Order: the configured `output_dir` (relative to `exe_dir`), then
-    /// `<exe_dir>/_OUTPUT` in portable mode, then `Documents\AVLT` in the user profile.
-    pub fn output_dir(&self, exe_dir: &Path, portable: bool) -> PathBuf {
+    /// `<exe_dir>/_OUTPUT` in portable mode, then `<user_dir>/AVLT`, where `user_dir`
+    /// is the user's resolved known folder (Documents, Music, ...). Without one it falls
+    /// back to `<exe_dir>/_OUTPUT`.
+    pub fn output_dir(&self, exe_dir: &Path, portable: bool, user_dir: Option<&Path>) -> PathBuf {
         if let Some(dir) = &self.output_dir {
             return exe_dir.join(dir);
         }
         if portable {
             return exe_dir.join(PORTABLE_OUTPUT_DIR);
         }
-        match home_dir() {
-            Some(home) => home.join("Documents").join("AVLT"),
+        match user_dir {
+            Some(dir) => dir.join("AVLT"),
             None => exe_dir.join(PORTABLE_OUTPUT_DIR),
         }
     }
@@ -107,14 +109,6 @@ impl Config {
 /// Portable mode: `avlt.toml` or an `_OUTPUT` folder exists next to the executable.
 pub fn is_portable(exe_dir: &Path) -> bool {
     exe_dir.join(CONFIG_FILE).is_file() || exe_dir.join(PORTABLE_OUTPUT_DIR).is_dir()
-}
-
-/// The user's profile folder (`%USERPROFILE%`, or `$HOME` elsewhere).
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -198,18 +192,17 @@ gateway = "10.0.0.1"
     #[test]
     fn output_dir_portable_and_override() {
         let exe = Path::new("exe_dir");
+        let docs = Path::new("docs");
         let cfg = Config::default();
-        assert_eq!(cfg.output_dir(exe, true), exe.join("_OUTPUT"));
-        assert!(
-            cfg.output_dir(exe, false)
-                .ends_with(Path::new("Documents").join("AVLT"))
-        );
+        assert_eq!(cfg.output_dir(exe, true, Some(docs)), exe.join("_OUTPUT"));
+        assert_eq!(cfg.output_dir(exe, false, Some(docs)), docs.join("AVLT"));
+        assert_eq!(cfg.output_dir(exe, false, None), exe.join("_OUTPUT"));
 
         let rel = Config {
             output_dir: Some(PathBuf::from("out")),
             ..Config::default()
         };
-        assert_eq!(rel.output_dir(exe, false), exe.join("out"));
-        assert_eq!(rel.output_dir(exe, true), exe.join("out"));
+        assert_eq!(rel.output_dir(exe, false, Some(docs)), exe.join("out"));
+        assert_eq!(rel.output_dir(exe, true, None), exe.join("out"));
     }
 }

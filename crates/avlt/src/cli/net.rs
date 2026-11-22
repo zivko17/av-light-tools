@@ -3,11 +3,9 @@
 use std::future::Future;
 use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use avlt_core::config::Config;
 use avlt_core::net::COMMON_PORTS;
 use avlt_core::net::format::{
     LatencyStats, LinkClass, format_bps, format_bytes, format_elapsed, format_link_speed,
@@ -189,18 +187,9 @@ pub fn run(cmd: NetCmd, out: &Out) -> Result<()> {
 
 // ---------------------------------------------------------------- helpers
 
-/// `avlt.toml` next to the executable (defaults when absent).
-fn config() -> Result<Config> {
-    let dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."));
-    Config::load(&dir)
-}
-
 /// The adapter to act on: explicit name, then avlt.toml `iface`, then the default route's.
 fn resolve_adapter(explicit: Option<&str>) -> Result<Adapter> {
-    let cfg = config()?;
+    let cfg = super::env::load_config()?;
     pnet::default_adapter(explicit.or(cfg.iface.as_deref()))
 }
 
@@ -914,7 +903,7 @@ fn speedtest(out: &Out) -> Result<()> {
 ///
 /// Order: validate the target, require administrator, resolve the adapter, confirm, apply.
 fn setip(args: SetipArgs, out: &Out) -> Result<()> {
-    let cfg = config()?;
+    let cfg = super::env::load_config()?;
     let target = parse_ip_target(&args.target, args.gateway.as_deref(), &cfg.ip_profiles)?;
     require_admin()?;
     // Never the Wi-Fi of the default route by accident: see `setip_adapter`.
