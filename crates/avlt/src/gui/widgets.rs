@@ -285,6 +285,9 @@ impl<A> Confirm<A> {
 
     /// Draws the modal; returns the action once the user confirms it.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<A> {
+        if !self.is_open() {
+            return None;
+        }
         let (question, _) = self.pending.as_ref()?;
         let question = question.clone();
         let mut answer = None;

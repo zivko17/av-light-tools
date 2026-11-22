@@ -11,11 +11,8 @@ pub mod media;
 pub mod ndi;
 pub mod net;
 pub mod sys;
-// Shared by the sections, which later commits of this task fill in.
-#[allow(dead_code)]
 pub mod task;
 pub mod theme;
-#[allow(dead_code)]
 pub mod widgets;
 
 use std::path::PathBuf;
@@ -59,7 +56,6 @@ impl Section {
 }
 
 /// What a section gets each frame besides its own state.
-#[allow(dead_code)]
 pub struct Cx<'a> {
     pub runner: &'a Runner,
     /// The process runs elevated.
@@ -201,7 +197,6 @@ pub fn run() -> Result<()> {
 }
 
 /// Tabs inside a section: a row of selectable labels.
-#[allow(dead_code)]
 pub fn tabs<T: Copy + PartialEq>(ui: &mut egui::Ui, current: &mut T, all: &[(T, &str)]) {
     ui.horizontal_wrapped(|ui| {
         for (t, name) in all {
