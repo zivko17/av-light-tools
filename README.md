@@ -16,6 +16,9 @@ cd C:\Scripts
 tools                # the menu
 ```
 
+`tools.bat` opens PowerShell straight into the menu (double-click, Win+R or a Stream Deck button);
+`tools_admin.bat` does the same as Administrator, for `setip`, `fw-*`, `scannet` and `reset-nic`.
+
 On a new PC, `.\Setup-NewPC.ps1` does all of that for both PowerShell editions
 and lists what is missing (`-InstallDeps` installs it with winget).
 
