@@ -71,11 +71,6 @@ Resolume Arena shortcuts (save, open, copy/paste, snapshot, test card...) and ge
 `New-VentoyStructure.ps1` creates the folder layout on the stick and
 `Get-VentoyTools.ps1` downloads the portable apps (CRU, Sysinternals, PuTTY, FFmpeg, iPerf3, Wireshark...).
 
-### NetMaint (C#, .NET 8)
-
-A WinForms network app (adapter info, IP config, ping, ports, scan, speedtest, traffic).
-Source only: build it with `dotnet build NetMaint`.
-
 ## External tools (optional)
 
 | Tool | Used by | Install |
@@ -91,9 +86,10 @@ Source only: build it with `dotnet build NetMaint`.
 - **Static IP profiles**: edit the `$profiles` table at the top of `SetIP.ps1`.
 - **Weather city**: `weather Madrid`, or change the default in `Weather.ps1`.
 
-## Rust (`avlt`)
+## Parked
 
-The Rust rewrite is parked in the hidden `.rust/` folder (CI disabled). See `.rust/README.md`.
+- `.rust/`: the Rust rewrite (`avlt`), CI disabled. See `.rust/README.md`.
+- `.netmaint/`: the NetMaint C# app. See `.netmaint/README.md`.
 
 ## License
 
