@@ -104,6 +104,7 @@ Write-Host "  [4/4] Checking external dependencies..." -ForegroundColor Yellow
 $deps = @(
     @{ Name='FFmpeg (ffmpeg + ffprobe)'; Cmd='ffmpeg.exe';    Winget='Gyan.FFmpeg';           Used='audiotools' }
     @{ Name='Ookla Speedtest';           Cmd='speedtest.exe'; Winget='Ookla.Speedtest.CLI';   Used='speedtest' }
+    @{ Name='Wireshark (tshark)';        Cmd='tshark.exe';    Winget='WiresharkFoundation.Wireshark'; Used='scannet' }
     @{ Name='NirCmd';                    Cmd='nircmd.exe';    Winget=$null;                   Used='monitors-arrange'; Url='https://www.nirsoft.net/utils/nircmd.html' }
 )
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue

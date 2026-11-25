@@ -41,7 +41,17 @@ function Write-Warn2([string]$t) { Write-Host "   $t" -ForegroundColor Yellow }
 # ---------------------------------------------------------------- comprobaciones
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Ejecuta PowerShell como administrador." -ForegroundColor Red; return
+    # Relaunch itself elevated with the same options
+    $argList = @('-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    foreach ($k in $PSBoundParameters.Keys) {
+        $v = $PSBoundParameters[$k]
+        if ($v -is [switch]) { if ($v) { $argList += "-$k" } }
+        else { $argList += "-$k"; $argList += "`"$v`"" }
+    }
+    Write-Host "Hace falta administrador: abriendo una consola elevada..." -ForegroundColor Yellow
+    try { Start-Process -FilePath (Get-Process -Id $PID).Path -Verb RunAs -ArgumentList $argList -ErrorAction Stop }
+    catch { Write-Host "Cancelado (no se acepto el UAC)" -ForegroundColor Red }
+    return
 }
 
 $tshark = @(
@@ -60,7 +70,11 @@ if ($Interface) {
     if ($cands.Count -eq 1) { $adapter = $cands[0] }
     else {
         for ($i = 0; $i -lt $cands.Count; $i++) { Write-Host ("  [{0}] {1}  ({2}, {3})" -f $i, $cands[$i].Name, $cands[$i].InterfaceDescription, $cands[$i].LinkSpeed) }
-        $adapter = $cands[[int](Read-Host "Elige interfaz")]
+        $pick = 0
+        if (-not [int]::TryParse((Read-Host "Elige interfaz"), [ref]$pick) -or $pick -lt 0 -or $pick -ge $cands.Count) {
+            Write-Host "Opcion no valida." -ForegroundColor Red; return
+        }
+        $adapter = $cands[$pick]
     }
 }
 $ifIndex = $adapter.ifIndex

@@ -38,6 +38,19 @@ to EDID). Nothing is installed and output goes to `<stick>\_OUTPUT`.
 | `speedtest` | Internet speed test (Ookla CLI) |
 | `flushdns`, `reset-nic` | Quick fixes |
 | `setip 0` / `setip 1` / `setip dhcp` / `setip 192.168.1.25/24 [gateway]` | Change the IP (Administrator) |
+| `scannet` | Arrive at an unknown network (fixed IPs, no DHCP): listens to the traffic, works out the subnets in use, takes a free temporary IP in each, sweeps them and lists every device with its vendor. Shows the managed switch and your port if it sends LLDP/CDP. Leaves the adapter as it was. Needs Wireshark (tshark + Npcap); asks for Administrator. `-Seconds 30`, `-PassiveOnly` (only listen), `-Keep` (keep the temporary IPs) |
+
+### Firewall — `Firewall.ps1`
+
+Open the Windows firewall for one program instead of turning it off. Every change asks for Administrator.
+
+| Command | What it does |
+|---------|--------------|
+| `fw-allow vmix` | Allow incoming traffic for every .exe of vMix. Presets: `vmix`, `dante`, `resolume`, `obs`, `companion`, `blackmagic`, `qsys`, `ledset`; or a path to an .exe / folder, or the name of a running process. `-Arreglar` also disables the block rules Windows created when someone clicked *Cancel* |
+| `fw-remove vmix` / `fw-remove all` | Undo what `fw-allow` added |
+| `fw-info` | Firewall state per profile and what `fw-allow` has opened |
+| `fw-blocks` | Active incoming block rules |
+| `fw-off -Minutos 60` / `fw-on` | Turn the firewall off (optionally back on by itself after N minutes) and on |
 
 ### Displays — `EDIDTools.ps1`, `Monitors.ps1`, `MonitorsArrange.ps1`
 
@@ -77,6 +90,7 @@ Resolume Arena shortcuts (save, open, copy/paste, snapshot, test card...) and ge
 |------|---------|---------|
 | FFmpeg | `audiotools` | `winget install Gyan.FFmpeg` |
 | Ookla Speedtest | `speedtest` | `winget install Ookla.Speedtest.CLI` |
+| Wireshark (tshark + Npcap) | `scannet` | `winget install WiresharkFoundation.Wireshark` |
 | NirCmd | `monitors-arrange` | <https://www.nirsoft.net/utils/nircmd.html> (put `nircmd.exe` next to the scripts) |
 | AudioDeviceCmdlets | `audio` | `Install-Module AudioDeviceCmdlets -Scope CurrentUser` |
 

@@ -102,6 +102,7 @@ foreach ($f in (Get-ChildItem -LiteralPath $ScriptDir -Filter '*.ps1' -File -Err
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tok, [ref]$perr)
         if ($ast.ParamBlock) {
             $name = [System.IO.Path]::GetFileNameWithoutExtension($f.Name).ToLower()
+            if ($name -eq 'find-avnetwork') { $name = 'scannet' }
             Set-Alias -Name $name -Value $f.FullName -Scope Global
             $cmds.Add($name)
         }

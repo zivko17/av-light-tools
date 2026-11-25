@@ -14,16 +14,18 @@
 # Variables en global: 'reload' recarga dentro de una funcion y solo copia funciones y alias
 $global:AVFwGroup = 'AV-Scripts'
 $global:AVFwTask  = 'AV-Scripts-FirewallOn'
+# This file: the elevated console loads it directly, so it works without a profile (portable too)
+$global:AVFwScript = $PSCommandPath
 
 # Presets: carpeta(s) de instalacion. Se abren todos los .exe que haya dentro
 $global:AVFwPresets = [ordered]@{
     vmix       = @('C:\Program Files (x86)\vMix', 'C:\Program Files\vMix')
+    dante      = @('C:\Program Files\Audinate', 'C:\Program Files (x86)\Audinate')
     resolume   = @('C:\Program Files\Resolume Arena', 'C:\Program Files\Resolume Avenue', 'C:\Program Files\Resolume Wire', 'C:\Program Files\Resolume Alley')
     arena      = @('C:\Program Files\Resolume Arena')
     avenue     = @('C:\Program Files\Resolume Avenue')
     wire       = @('C:\Program Files\Resolume Wire')
     obs        = @('C:\Program Files\obs-studio')
-    ndi        = @('C:\Program Files\NDI')
     companion  = @('C:\Program Files\Companion', "$env:LOCALAPPDATA\Programs\companion")
     blackmagic = @('C:\Program Files\Blackmagic Design', 'C:\Program Files (x86)\Blackmagic Design')
     qsys       = @('C:\Program Files\QSC')
@@ -56,10 +58,10 @@ function Invoke-AVFwElevated([string]$Line) {
     $exe = (Get-Process -Id $PID).Path
     # Lo que salga en la consola elevada queda tambien en %TEMP%\AV-Scripts-fw.log
     $log = Join-Path $env:TEMP 'AV-Scripts-fw.log'
-    $full = "Start-Transcript -LiteralPath '$log' -Force | Out-Null; try { $Line } finally { Stop-Transcript | Out-Null }"
+    $full = ". '$($AVFwScript -replace "'", "''")'; Start-Transcript -LiteralPath '$log' -Force | Out-Null; try { $Line } finally { Stop-Transcript | Out-Null }"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full))
     try {
-        Start-Process -FilePath $exe -Verb RunAs -ArgumentList "-NoExit -EncodedCommand $enc" -ErrorAction Stop
+        Start-Process -FilePath $exe -Verb RunAs -ArgumentList "-NoProfile -NoExit -EncodedCommand $enc" -ErrorAction Stop
     } catch {
         Write-Host "  Cancelado (no se acepto el UAC)`n" -ForegroundColor Red
     }
@@ -233,7 +235,7 @@ function Grant-AVFirewallApp {
         try {
             New-NetFirewallRule -DisplayName "$AVFwGroup [$($t.Tag)] $leaf" -Group $AVFwGroup `
                 -Direction Inbound -Action Allow -Profile Any -Program $t.Exe `
-                -Description "Creada por fw-allow (C:\scripts\Firewall.ps1)" -ErrorAction Stop | Out-Null
+                -Description "Creada por fw-allow (AV Light Tools)" -ErrorAction Stop | Out-Null
             $already[$t.Exe.ToLower()] = $true
             $nuevas++
             Write-Host "    +  [$($t.Tag)] $leaf" -ForegroundColor Green

@@ -13,41 +13,50 @@
 function Show-Tools {
     $sections = @(
         @{ Title = 'NETWORK'; Color = 'Cyan'; Items = @(
-            @{ Name = 'netinfo';   Desc = 'IP, gateway, DNS, MAC, speed' }
+            @{ Name = 'netinfo';   Desc = 'IP, gateway, DNS, MAC' }
             @{ Name = 'scan';      Desc = 'Who is on the network';      Ask = '[network, e.g. 192.168.10]' }
-            @{ Name = 'pingmulti'; Desc = 'Live ping of several devices'; Ask = 'IPs separated by spaces' }
+            @{ Name = 'scannet';   Desc = 'Discover unknown network'; Ask = '[-Seconds 30] [-PassiveOnly] [-Keep]' }
+            @{ Name = 'pingmulti'; Desc = 'Live ping of devices'; Ask = 'IPs separated by spaces' }
             @{ Name = 'portcheck'; Desc = 'Is a TCP port open?';          Ask = 'IP PORT' }
             @{ Name = 'whoison';   Desc = 'MAC + vendor of a device';     Ask = 'IP' }
             @{ Name = 'speed';     Desc = 'Live bandwidth down / up' }
             @{ Name = 'speedtest'; Desc = 'Internet speed test' }
             @{ Name = 'setip';     Desc = 'Change IP (Admin)';            Ask = '0 | 1 | dhcp | 192.168.1.25/24 [gateway]' }
             @{ Name = 'flushdns';  Desc = 'Clear DNS cache' }
-            @{ Name = 'reset-nic'; Desc = 'Restart network adapter (Admin)' }
+            @{ Name = 'reset-nic'; Desc = 'Restart adapter (Admin)' }
+        )}
+        @{ Title = 'FIREWALL'; Color = 'Red'; Items = @(
+            @{ Name = 'fw-info';   Desc = 'Status + opened programs' }
+            @{ Name = 'fw-allow';  Desc = 'Open it for one program';  Ask = 'vmix | dante | resolume | obs | qsys | path.exe  [-Arreglar]' }
+            @{ Name = 'fw-remove'; Desc = 'Undo fw-allow';            Ask = 'program | all' }
+            @{ Name = 'fw-blocks'; Desc = 'Active block rules' }
+            @{ Name = 'fw-off';    Desc = 'Turn it off (Admin)';      Ask = '[-Minutos 60]' }
+            @{ Name = 'fw-on';     Desc = 'Turn it back on (Admin)' }
         )}
         @{ Title = 'DISPLAYS'; Color = 'Magenta'; Items = @(
-            @{ Name = 'edid';             Desc = 'EDID menu: read, compare, dump' }
+            @{ Name = 'edid';             Desc = 'EDID: read, compare, dump' }
             @{ Name = 'edid-list';        Desc = 'What every display reports' }
             @{ Name = 'edid-diff';        Desc = 'Compare two EDIDs'; Ask = 'A B   (e.g. 1 projector.bin)' }
             @{ Name = 'monitors';         Desc = 'Outputs: resolution and Hz' }
             @{ Name = 'monitors-arrange'; Desc = 'Change resolution / Hz' }
         )}
         @{ Title = 'AUDIO'; Color = 'Green'; Items = @(
-            @{ Name = 'audiotools';     Desc = 'Convert, normalize, trim (FFmpeg)' }
+            @{ Name = 'audiotools';     Desc = 'Convert / normalize audio' }
             @{ Name = 'audio';          Desc = 'Audio devices and volume' }
-            @{ Name = 'services-audio'; Desc = 'Windows audio + Dante services' }
+            @{ Name = 'services-audio'; Desc = 'Audio + Dante services' }
         )}
         @{ Title = 'SYSTEM'; Color = 'Yellow'; Items = @(
-            @{ Name = 'sysinfo'; Desc = 'Model, CPU, RAM, GPU, S/N, OS' }
+            @{ Name = 'sysinfo'; Desc = 'Model, CPU, RAM, GPU, OS' }
             @{ Name = 'tele';    Desc = 'Live CPU / RAM / GPU / net' }
             @{ Name = 'top';     Desc = 'What is using the CPU now' }
             @{ Name = 'killp';   Desc = 'Close a program by name'; Ask = 'name (e.g. resolume)' }
             @{ Name = 'usb';     Desc = 'Connected USB devices' }
             @{ Name = 'disks';   Desc = 'Disk health and free space' }
-            @{ Name = 'startup'; Desc = 'Programs that start at boot' }
+            @{ Name = 'startup'; Desc = 'Programs at boot' }
             @{ Name = 'battery'; Desc = 'Battery charge and health' }
         )}
         @{ Title = 'UTILITIES'; Color = 'DarkYellow'; Items = @(
-            @{ Name = 'cleanup'; Desc = 'Delete temp files and caches' }
+            @{ Name = 'cleanup'; Desc = 'Delete temp and caches' }
             @{ Name = 'backup';  Desc = 'Copy with date';        Ask = '"source" "destination"' }
             @{ Name = 'search';  Desc = 'Find files by name';    Ask = 'text' }
             @{ Name = 'timer';   Desc = 'Countdown with beep';   Ask = 'time (5m, 1h30m, 90s)' }
