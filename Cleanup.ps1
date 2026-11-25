@@ -9,13 +9,15 @@ function Invoke-SystemCleanup {
     if ($confirm -notmatch '^(y|yes)$') { Write-Host "  Cancelled.`n" -ForegroundColor DarkGray; return }
     Write-Host ""
 
+    # Prefetch is NOT cleaned: Windows uses it to start programs faster.
     $targets = @(
-        @{ Name = "User Temp";        Path = "$env:TEMP\*" },
-        @{ Name = "Windows Temp";     Path = "C:\Windows\Temp\*" },
-        @{ Name = "Prefetch";         Path = "C:\Windows\Prefetch\*" },
-        @{ Name = "Browser caches";   Path = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache\*" },
-        @{ Name = "Edge cache";       Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache\*" }
+        @{ Name = "User Temp";    Path = "$env:TEMP\*" },
+        @{ Name = "Chrome cache"; Path = "$env:LOCALAPPDATA\Google\Chrome\User Data\*\Cache\*" },
+        @{ Name = "Edge cache";   Path = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\*\Cache\*" }
     )
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) { $targets += @{ Name = "Windows Temp"; Path = "$env:SystemRoot\Temp\*" } }
+    else { Write-Host "  (Not Administrator: Windows Temp is skipped)" -ForegroundColor DarkGray }
 
     $totalFreed = 0
 

@@ -965,12 +965,14 @@ function Export-EDIDBinary {
 
     if (-not $Path) { $Path = Get-EDIDOutputPath }
     $Path = $Path.Trim().Trim('"')
+    # .NET resolves relative paths against the process folder, not PowerShell's $PWD
+    $Path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 
     $targets = @()
-    if ($All -or $Remembered) {
+    if ($All) {
         $targets = @(Get-EDIDDevice -Remembered:$Remembered | Where-Object { $_.Bytes } | ForEach-Object {
             [PSCustomObject]@{ Name = "display $($_.Index)"; Tag = "$($_.Index)"; Bytes = $_.Bytes; Edid = $_.Edid }
         })

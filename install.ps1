@@ -58,6 +58,7 @@ $loaderLines = @(
     '    . $__avltF.FullName'
     '}'
     'if (Test-Path "$__avltDir\SetIP.ps1") { Set-Alias -Name setip -Value "$__avltDir\SetIP.ps1" }'
+    'if (Test-Path "$__avltDir\Find-AVNetwork.ps1") { Set-Alias -Name scannet -Value "$__avltDir\Find-AVNetwork.ps1" }'
     'Remove-Variable __avltDir, __avltF, __avltH -ErrorAction SilentlyContinue'
 )
 

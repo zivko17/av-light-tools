@@ -43,23 +43,23 @@ function Get-SystemInfo {
 
     # Read accurate VRAM from the registry: AdapterRAM is a UInt32 that caps at 4 GB
     # and under-reports large GPUs. qwMemorySize (Int64) is the real value when present.
-    $gpuRegMem = @(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue |
-                   ForEach-Object { $_.'HardwareInformation.qwMemorySize' } |
-                   Where-Object { $_ -and $_ -gt 0 })
+    # Matched by driver description, so an iGPU + dGPU laptop gets each GPU's own value.
+    $gpuRegMem = @{}
+    Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.DriverDesc -and $_.'HardwareInformation.qwMemorySize' -gt 0 } |
+        ForEach-Object { $gpuRegMem[$_.DriverDesc] = [int64]$_.'HardwareInformation.qwMemorySize' }
 
     Write-Host "  --- GPU ---" -ForegroundColor Yellow
-    $gpuIndex = 0
     foreach ($g in $gpus) {
         $vram = "?"
-        if ($gpuIndex -lt $gpuRegMem.Count -and $gpuRegMem[$gpuIndex] -gt 0) {
-            $vram = [math]::Round([int64]$gpuRegMem[$gpuIndex] / 1GB, 1)
+        if ($gpuRegMem.ContainsKey($g.Name)) {
+            $vram = [math]::Round($gpuRegMem[$g.Name] / 1GB, 1)
         } elseif ($g.AdapterRAM) {
             $vram = [math]::Round($g.AdapterRAM / 1GB, 1)
         }
         Write-Host ("    Name:           {0}" -f $g.Name)
         Write-Host ("    VRAM:           {0} GB" -f $vram) -ForegroundColor DarkGray
         Write-Host ("    Driver:         {0}  ({1})" -f $g.DriverVersion, $g.DriverDate) -ForegroundColor DarkGray
-        $gpuIndex++
     }
     Write-Host ""
 

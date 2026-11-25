@@ -1,8 +1,15 @@
 ﻿param(
     [Parameter(Mandatory=$true, Position=0)][string]$Target,
     [Parameter(Position=1)][string]$Gateway,
-    [string]$Iface = "Ethernet"
+    [string]$Iface
 )
+
+# Same adapter as netinfo/scan (NetTools.ps1), or "Ethernet" if those are not loaded
+if (-not $Iface) {
+    if (Get-Command Resolve-NetIface -ErrorAction SilentlyContinue) { $Iface = Resolve-NetIface }
+    if (-not $Iface) { $Iface = "Ethernet" }
+}
+Write-Host "Adapter: $Iface  (use -Iface 'Name' to pick another)" -ForegroundColor DarkGray
 
 # ---- Predefined profiles ----
 $profiles = @{

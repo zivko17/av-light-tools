@@ -102,9 +102,9 @@ if ($SkipProfile) {
 # --- 4. external dependencies ---
 Write-Host "  [4/4] Checking external dependencies..." -ForegroundColor Yellow
 $deps = @(
-    @{ Name='FFmpeg (ffmpeg + ffprobe)'; Cmd='ffmpeg.exe';    Winget='Gyan.FFmpeg';           Used='AudioTools, video convert/probe' }
-    @{ Name='Ookla Speedtest';           Cmd='speedtest.exe'; Winget='Ookla.Speedtest.CLI';   Used='nettools speedtest' }
-    @{ Name='yt-dlp';                    Cmd='yt-dlp.exe';    Winget='yt-dlp.yt-dlp';         Used='dl / media download' }
+    @{ Name='FFmpeg (ffmpeg + ffprobe)'; Cmd='ffmpeg.exe';    Winget='Gyan.FFmpeg';           Used='audiotools' }
+    @{ Name='Ookla Speedtest';           Cmd='speedtest.exe'; Winget='Ookla.Speedtest.CLI';   Used='speedtest' }
+    @{ Name='Wireshark (tshark)';        Cmd='tshark.exe';    Winget='WiresharkFoundation.Wireshark'; Used='scannet' }
     @{ Name='NirCmd';                    Cmd='nircmd.exe';    Winget=$null;                   Used='monitors-arrange'; Url='https://www.nirsoft.net/utils/nircmd.html' }
 )
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
@@ -149,4 +149,5 @@ if ($missing.Count -gt 0) {
 Write-Host ""
 Write-Host "  === Done ===" -ForegroundColor Cyan
 Write-Host "  Open a NEW PowerShell window (or run  . `$PROFILE ) and type 'tools'." -ForegroundColor Yellow
+Write-Host "  The .ahk / .bat helpers expect this folder to be C:\Scripts." -ForegroundColor DarkGray
 Write-Host ""
