@@ -1,1 +1,1 @@
-start "" "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" "C:\scripts\volume_up.ahk"
+start "" "C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe" "C:\scripts\volume_down.ahk"

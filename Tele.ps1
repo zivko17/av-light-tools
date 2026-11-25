@@ -13,7 +13,8 @@ function Get-SystemTelemetry {
     }
 
     # Track previous NET counters so we can show a rate, not a since-boot total
-    $prevRx = $null; $prevTx = $null
+    $prevRx = $null; $prevTx = $null; $prevT = $null
+    $netName = if (Get-Command Resolve-NetIface -ErrorAction SilentlyContinue) { Resolve-NetIface } else { $null }
 
     while ($true) {
         $hasConsole = -not [Console]::IsOutputRedirected
@@ -22,12 +23,11 @@ function Get-SystemTelemetry {
             try { $cursorTop = [Console]::CursorTop } catch { $hasConsole = $false }
         }
 
-        # English counter path (also localized on non-EN Windows -> falls back to 0 there)
+        # WMI performance classes: same names on every Windows language (Get-Counter
+        # paths are translated, so they return nothing on a Spanish Windows).
         $cpu = 0
-        $cpuCounter = Get-Counter "\Processor(_Total)\% Processor Time" -ErrorAction SilentlyContinue
-        if ($cpuCounter -and $cpuCounter.CounterSamples) {
-            $cpu = [math]::Round($cpuCounter.CounterSamples[0].CookedValue, 1)
-        }
+        $cpuRow = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction SilentlyContinue
+        if ($cpuRow) { $cpu = [double]$cpuRow.PercentProcessorTime }
 
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
         $ramTotal = 0; $ramFree = 0; $ramUsed = 0; $ramPct = 0
@@ -46,22 +46,26 @@ function Get-SystemTelemetry {
             $diskPct   = [math]::Round((($diskTotal - $diskFree) / $diskTotal) * 100, 1)
         }
 
-        $net = Get-NetAdapterStatistics -ErrorAction SilentlyContinue | Where-Object { $_.ReceivedBytes -gt 0 } | Select-Object -First 1
+        $net = if ($netName) { Get-NetAdapterStatistics -Name $netName -ErrorAction SilentlyContinue }
+        if (-not $net) { $net = Get-NetAdapterStatistics -ErrorAction SilentlyContinue | Where-Object { $_.ReceivedBytes -gt 0 } | Select-Object -First 1 }
         $rxRate = 0; $txRate = 0
+        $now = Get-Date
         if ($net) {
             if ($null -ne $prevRx) {
-                $rxRate = [math]::Round(($net.ReceivedBytes - $prevRx) / 1MB, 2)
-                $txRate = [math]::Round(($net.SentBytes    - $prevTx) / 1MB, 2)
+                $dt = ($now - $prevT).TotalSeconds; if ($dt -le 0) { $dt = 1 }
+                $rxRate = [math]::Round(($net.ReceivedBytes - $prevRx) / 1MB / $dt, 2)
+                $txRate = [math]::Round(($net.SentBytes    - $prevTx) / 1MB / $dt, 2)
                 if ($rxRate -lt 0) { $rxRate = 0 }
                 if ($txRate -lt 0) { $txRate = 0 }
             }
             $prevRx = $net.ReceivedBytes
             $prevTx = $net.SentBytes
+            $prevT  = $now
         }
 
-        $gpu = (Get-Counter "\GPU Engine(*engtype_3D)\Utilization Percentage" -ErrorAction SilentlyContinue).CounterSamples |
-               Where-Object { $_.CookedValue -gt 0 } | Measure-Object -Property CookedValue -Sum
-        $gpuPct = if ($gpu) { [math]::Round($gpu.Sum, 1) } else { 0 }
+        $gpu = Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -like '*engtype_3D' } | Measure-Object -Property UtilizationPercentage -Sum
+        $gpuPct = if ($gpu -and $gpu.Sum) { [math]::Round([double]$gpu.Sum, 1) } else { 0 }
 
         $colorCPU = if ($cpu -gt 80) {"Red"} elseif ($cpu -gt 50) {"Yellow"} else {"Green"}
         $colorRAM = if ($ramPct -gt 80) {"Red"} elseif ($ramPct -gt 50) {"Yellow"} else {"Green"}

@@ -1,9 +1,10 @@
 function Get-Weather {
     param(
-        [string]$City = "Madrid",
+        [Parameter(Position = 0)][string]$City = "Ibiza",
         [ValidateSet("full","short","mini")]
         [string]$Format = "short"
     )
+    $City = [uri]::EscapeDataString($City)
     try {
         switch ($Format) {
             "full"  { $url = "https://wttr.in/${City}?lang=en&M" }

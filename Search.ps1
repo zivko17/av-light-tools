@@ -6,8 +6,8 @@ function Invoke-CustomSearch {
     )
     Write-Host "Searching files named like '$Pattern' under '$Path'..." -ForegroundColor Cyan
     $results = New-Object System.Collections.Generic.List[object]
-    Get-ChildItem -Path $Path -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like "*$Pattern*" } |
+    # -Filter is applied by the file system itself: far faster than filtering afterwards.
+    Get-ChildItem -LiteralPath $Path -Filter "*$Pattern*" -File -Recurse -ErrorAction SilentlyContinue |
     ForEach-Object {
         $results.Add($_)
         $index = $results.Count

@@ -131,9 +131,8 @@ Write-Host ""
 
 # 3. What the host is missing (portable runs land on machines that have nothing)
 $optional = @(
-    @{ Cmd='ffmpeg';    For='convert / audiotools / probe' }
+    @{ Cmd='ffmpeg';    For='audiotools' }
     @{ Cmd='ffprobe';   For='probe-audio' }
-    @{ Cmd='yt-dlp';    For='dl' }
     @{ Cmd='speedtest'; For='speedtest' }
 )
 $missing = @($optional | Where-Object { -not (Get-Command $_.Cmd -ErrorAction SilentlyContinue) })

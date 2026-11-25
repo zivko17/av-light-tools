@@ -6,21 +6,16 @@ function Show-Tools {
     #  - Items with 'Info' are reference-only (no number).
     # ----------------------------------------------------------------------
     $sections = @(
-        @{ Title = "Networking"; Items = @(
-            @{ Name="nettools";    Desc="Interactive menu with all network tools" }
-            @{ Name="netinfo";     Desc="IP, gateway, DNS, mode of Ethernet" }
-            @{ Name="myip";        Desc="Local + public IP, gateway, DNS, MAC, link speed" }
-            @{ Name="scan";        Desc="Discover hosts in subnet (parallel)" }
-            @{ Name="portcheck";   Desc="Test single TCP port  (portcheck IP PORT)" }
-            @{ Name="portscan";    Desc="Scan common ports of an IP" }
-            @{ Name="whoison";     Desc="Identify device (MAC + vendor)" }
-            @{ Name="pingmulti";   Desc="Live monitor of multiple IPs at once" }
-            @{ Name="latency";     Desc="Live latency monitor with bar chart" }
-            @{ Name="speed";       Desc="Live bandwidth monitor (down/up)" }
-            @{ Name="connections"; Desc="Active TCP connections by process" }
-            @{ Name="speedtest";   Desc="Internet speed test (Ookla CLI)" }
-            @{ Name="flushdns";    Desc="Clear DNS cache" }
-            @{ Name="reset-nic";   Desc="Restart Ethernet adapter" }
+        @{ Title = "Network"; Items = @(
+            @{ Name="netinfo";   Desc="IP, gateway, DNS, MAC, link speed of every adapter" }
+            @{ Name="scan";      Desc="Who is on the network  (scan / scan 192.168.10)" }
+            @{ Name="pingmulti"; Desc="Live monitor of devices  (pingmulti IP IP ...)" }
+            @{ Name="portcheck"; Desc="Is a TCP port open?  (portcheck IP PORT)" }
+            @{ Name="whoison";   Desc="MAC + vendor of a device  (whoison IP)" }
+            @{ Name="speed";     Desc="Live bandwidth (down/up)" }
+            @{ Name="speedtest"; Desc="Internet speed test (Ookla CLI)" }
+            @{ Name="flushdns";  Desc="Clear DNS cache" }
+            @{ Name="reset-nic"; Desc="Restart the network adapter (Admin)" }
         )}
         @{ Title = "IP Configuration (run as Admin)"; Items = @(
             @{ Info="setip 0                              Profile 0  (192.168.0.99)" }
@@ -29,61 +24,35 @@ function Show-Tools {
             @{ Info="setip 192.168.1.25/24                Static IP, no gateway" }
             @{ Info="setip 192.168.1.25/24 192.168.1.1    Static IP + gateway" }
         )}
+        @{ Title = "Displays"; Items = @(
+            @{ Name="edid";             Desc="EDID menu (read / decode / compare / dump)" }
+            @{ Name="edid-list";        Desc="What every display reports" }
+            @{ Name="edid-diff";        Desc="Compare two EDIDs  (edid-diff 1 projector.bin)" }
+            @{ Name="edid-dump";        Desc="Save raw EDID to .bin" }
+            @{ Name="monitors";         Desc="Connected displays: resolution, Hz, model" }
+            @{ Name="monitors-arrange"; Desc="Change resolution / refresh rate (needs nircmd)" }
+        )}
+        @{ Title = "Audio"; Items = @(
+            @{ Name="audiotools";     Desc="FFmpeg audio menu (convert / normalize / trim / extract)" }
+            @{ Name="audio";          Desc="Audio devices + default + volume" }
+            @{ Name="services-audio"; Desc="Windows audio + Dante services status" }
+        )}
         @{ Title = "System"; Items = @(
-            @{ Name="sysinfo";          Desc="Full PC info: model, CPU, RAM, GPU, S/N, OS, uptime" }
-            @{ Name="tele";             Desc="Live system telemetry (CPU/RAM/GPU/disk/net)" }
-            @{ Name="top";              Desc="Top processes by CPU/RAM (live)" }
-            @{ Name="killp";            Desc="Kill process by name  (killp resolume)" }
-            @{ Name="usb";              Desc="Connected USB devices grouped by type" }
-            @{ Name="disks";            Desc="Physical disks (SMART, temp) + volumes" }
-            @{ Name="monitors";         Desc="Connected displays info" }
-            @{ Name="monitors-arrange"; Desc="Change resolution / refresh rate (menu)" }
-            @{ Name="audio";            Desc="Audio devices + default + volume" }
-            @{ Name="services-audio";   Desc="Status of all audio services" }
-            @{ Name="startup";          Desc="Programs that launch at boot" }
-            @{ Name="battery";          Desc="Battery charge + health + time left" }
-        )}
-        @{ Title = "Video / Audio (AVTools - FFmpeg)"; Items = @(
-            @{ Name="av";      Desc="Interactive AVTools menu (convert / probe / download)" }
-            @{ Name="convert"; Desc="Convert media (codec, quality, GPU)  -> Videos folder" }
-            @{ Name="probe";   Desc="Show technical info of a media file" }
-            @{ Name="dl";      Desc="Download video via yt-dlp  -> Videos folder" }
-        )}
-        @{ Title = "Audio Tools"; Items = @(
-            @{ Name="audiotools"; Desc="FFmpeg audio menu (convert / normalize / trim / extract)" }
-        )}
-        @{ Title = "EDID / Displays"; Items = @(
-            @{ Name="edid";       Desc="Interactive EDID menu (read / decode / compare / dump)" }
-            @{ Name="edid-list";  Desc="Summary of every display + what it reports" }
-            @{ Name="edid-info";  Desc="Full EDID decode  (edid-info 1 / edid-info file.bin)" }
-            @{ Name="edid-check"; Desc="Validate EDID: checksums, timings vs declared limits" }
-            @{ Name="edid-diff";  Desc="Compare two EDIDs  (edid-diff 1 proyector.bin)" }
-            @{ Name="edid-dump";  Desc="Save raw EDID to .bin  (for CRU / AW Editor / matrix)" }
-        )}
-        @{ Title = "NDI"; Items = @(
-            @{ Name="ndi";          Desc="Interactive NDI menu (diagnostics + launch apps)" }
-            @{ Name="ndi-launch";   Desc="Open NDI Tools app  (ndi-launch monitor/router/test...)" }
-            @{ Name="ndi-check";    Desc="Network diagnostic for NDI" }
-            @{ Name="ndi-services"; Desc="NDI services and running NDI processes" }
-            @{ Name="ndi-config";   Desc="Read NDI Access Manager configuration" }
-        )}
-        @{ Title = "Reverse Engineering (REA)"; Items = @(
-            @{ Name="reatools";   Desc="Interactive REA menu (binaries / APK / JS / .NET)" }
-            @{ Name="rea-doctor"; Desc="Check engines: Ghidra / JADX / JDK" }
-            @{ Name="rea";        Desc="REA CLI directly  (rea <command> ...)" }
-            @{ Info="rea analyze <file>                   Overview of an app or binary" }
-            @{ Info="rea decompile <file> <proc>          Pseudocode of one procedure (Ghidra)" }
-            @{ Info="rea inspect-android-package <apk>    APK manifest + SDK + permissions (JADX)" }
-            @{ Info="rea --help                           Full command list (200+ commands)" }
-        )}
-        @{ Title = "Maintenance"; Items = @(
-            @{ Name="cleanup"; Desc="Clean temp files, caches and recycle bin" }
-            @{ Name="backup";  Desc='Quick backup with date  (backup "src" "dest")' }
+            @{ Name="sysinfo"; Desc="PC info: model, CPU, RAM, GPU, S/N, OS, uptime" }
+            @{ Name="tele";    Desc="Live CPU / RAM / GPU / disk / network" }
+            @{ Name="top";     Desc="Processes using the most CPU right now" }
+            @{ Name="killp";   Desc="Kill a process by name  (killp resolume)" }
+            @{ Name="usb";     Desc="Connected USB devices" }
+            @{ Name="disks";   Desc="Disks: health, temperature, free space" }
+            @{ Name="startup"; Desc="Programs that launch at boot" }
+            @{ Name="battery"; Desc="Battery charge, health, time left" }
+            @{ Name="cleanup"; Desc="Delete temp files, caches, recycle bin" }
         )}
         @{ Title = "Utilities"; Items = @(
-            @{ Name="search";  Desc='Search files by name  (search "text")' }
-            @{ Name="weather"; Desc="Weather in Ibiza  (-City / -Format full/short/mini)" }
-            @{ Name="timer";   Desc="Countdown timer with beep  (timer 5m / 1h30m / 90s)" }
+            @{ Name="backup";  Desc='Copy with date  (backup "src" "dest")' }
+            @{ Name="search";  Desc='Find files by name  (search "text")' }
+            @{ Name="timer";   Desc="Countdown with beep  (timer 5m / 1h30m / 90s)" }
+            @{ Name="weather"; Desc="Weather  (weather Ibiza)" }
         )}
     )
 

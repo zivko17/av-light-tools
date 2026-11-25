@@ -106,6 +106,20 @@ function Get-NonCollidingPath {
     return $cand
 }
 
+# Codec + extension that keep the source's format. WAV/AIFF are written as 24-bit so
+# processed masters are never truncated; anything that is not FLAC/WAV/MP3 becomes AAC (.m4a).
+function Get-SameFormatCodec {
+    param([System.IO.FileInfo]$File)
+    switch ($File.Extension.ToLower()) {
+        '.flac' { return @{ ext = '.flac'; args = @('-c:a','flac') } }
+        '.wav'  { return @{ ext = '.wav';  args = @('-c:a','pcm_s24le') } }
+        '.aif'  { return @{ ext = '.wav';  args = @('-c:a','pcm_s24le') } }
+        '.aiff' { return @{ ext = '.wav';  args = @('-c:a','pcm_s24le') } }
+        '.mp3'  { return @{ ext = '.mp3';  args = @('-c:a','libmp3lame','-b:a','320k') } }
+        default { return @{ ext = '.m4a';  args = @('-c:a','aac','-b:a','256k') } }
+    }
+}
+
 function Invoke-AudioConvert {
     param(
         [Parameter(Mandatory=$true)][string]$Path,
@@ -117,7 +131,7 @@ function Invoke-AudioConvert {
     $files = Get-AudioInputs -Path $Path
     if ($files.Count -eq 0) { Write-Host "  No audio files found." -ForegroundColor Yellow; return }
     $outDir = [Environment]::GetFolderPath('MyMusic')
-    if (-not (Test-Path $outDir)) { New-Item -Path $outDir -ItemType Directory -Force | Out-Null }
+    if (-not (Test-Path -LiteralPath $outDir)) { New-Item -Path $outDir -ItemType Directory -Force | Out-Null }
     $meta = $script:AudioCodecMeta[$Codec]
     if (-not $meta) { Write-Host "  Unknown codec: $Codec" -ForegroundColor Red; return }
 
@@ -129,7 +143,7 @@ function Invoke-AudioConvert {
         $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
         $output = Join-Path $outDir "${base}_$($meta.label)$($meta.ext)"
         $output = Get-NonCollidingPath $output $used
-        $ffArgs = @('-hide_banner','-y','-i', $f.FullName) + $meta.args
+        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-vn') + $meta.args
         if ($SampleRate) { $ffArgs += @('-ar', "$SampleRate") }
         if ($Channels -eq 'mono') { $ffArgs += @('-ac','1') }
         if ($Channels -eq 'stereo') { $ffArgs += @('-ac','2') }
@@ -137,7 +151,7 @@ function Invoke-AudioConvert {
         Write-Host ("  [$i/$total] " + $f.Name) -ForegroundColor DarkGray
         $exit = Invoke-AudioFF -Ffmpeg $ffmpeg -FFArgs $ffArgs
         if ($exit -eq 0 -and (Test-Path -LiteralPath $output)) {
-            $sizeMB = [math]::Round((Get-Item $output).Length / 1MB, 1)
+            $sizeMB = [math]::Round((Get-Item -LiteralPath $output).Length / 1MB, 1)
             Write-Host ("        OK -> $(Split-Path $output -Leaf)  ($sizeMB MB)") -ForegroundColor Green
             $ok++
         } else { Write-Host "        FAILED" -ForegroundColor Red; $fail++ }
@@ -172,10 +186,8 @@ function Invoke-AudioNormalize {
     foreach ($f in $files) {
         $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
         # Output extension MUST match the chosen codec, or we'd write e.g. MP3 data into a .m4a/.opus container
-        if     ($f.Extension -ieq '.flac') { $codec = 'flac';       $outExt = '.flac' }
-        elseif ($f.Extension -ieq '.wav')  { $codec = 'pcm_s16le';  $outExt = '.wav'  }
-        else                               { $codec = 'libmp3lame'; $outExt = '.mp3'  }
-        $output = Join-Path $outDir "${base}_norm$outExt"
+        $fmt = Get-SameFormatCodec $f
+        $output = Join-Path $outDir "${base}_norm$($fmt.ext)"
         $output = Get-NonCollidingPath $output $used
         Write-Host "  $($f.Name)" -ForegroundColor DarkGray
 
@@ -192,7 +204,10 @@ function Invoke-AudioNormalize {
             Write-Host "        (measurement failed, single-pass fallback)" -ForegroundColor Yellow
             $lf = 'loudnorm=I=-23:LRA=7:TP=-2'
         }
-        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-af', $lf, '-c:a', $codec, $output)
+        # loudnorm upsamples to 192 kHz internally: put the source rate back
+        $rate = [regex]::Match($measure.Err, 'Audio:[^\n]*?(\d{4,6}) Hz').Groups[1].Value
+        if (-not $rate) { $rate = '48000' }
+        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-vn', '-af', $lf, '-ar', $rate) + $fmt.args + @($output)
         $exit = Invoke-AudioFF -Ffmpeg $ffmpeg -FFArgs $ffArgs
         if ($exit -eq 0) { Write-Host "        OK -> $(Split-Path $output -Leaf)" -ForegroundColor Green }
         else { Write-Host "        FAILED" -ForegroundColor Red }
@@ -235,7 +250,7 @@ function Invoke-ExtractAudio {
         $codecArgs = switch ($Format) {
             'mp3' { @('-vn','-c:a','libmp3lame','-b:a','320k') }
             'flac' { @('-vn','-c:a','flac') }
-            'wav' { @('-vn','-c:a','pcm_s16le') }
+            'wav' { @('-vn','-c:a','pcm_s24le') }
             'copy' { @('-vn','-c:a','copy') }
         }
         $ffArgs = @('-hide_banner','-y','-i', $f.FullName) + $codecArgs + @($output)
@@ -258,15 +273,10 @@ function Invoke-AudioResample {
     $used = [System.Collections.Generic.HashSet[string]]::new()
     foreach ($f in $files) {
         $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
-        $output = Join-Path $outDir "${base}_${SampleRate}$($f.Extension)"
+        $fmt = Get-SameFormatCodec $f
+        $output = Join-Path $outDir "${base}_${SampleRate}$($fmt.ext)"
         $output = Get-NonCollidingPath $output $used
-        $codec = switch ($f.Extension.ToLower()) {
-            '.flac' { @('-c:a','flac') }
-            '.wav' { @('-c:a','pcm_s16le') }
-            '.mp3' { @('-c:a','libmp3lame','-b:a','320k') }
-            default { @('-c:a','aac','-b:a','256k') }
-        }
-        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-ar', $SampleRate) + $codec + @($output)
+        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-vn', '-ar', $SampleRate) + $fmt.args + @($output)
         Write-Host "  $($f.Name)" -ForegroundColor DarkGray
         $exit = Invoke-AudioFF -Ffmpeg $ffmpeg -FFArgs $ffArgs
         if ($exit -eq 0) { Write-Host "        OK" -ForegroundColor Green }
@@ -287,15 +297,10 @@ function Invoke-AudioChannels {
     $used = [System.Collections.Generic.HashSet[string]]::new()
     foreach ($f in $files) {
         $base = [IO.Path]::GetFileNameWithoutExtension($f.Name)
-        $output = Join-Path $outDir "${base}_$Mode$($f.Extension)"
+        $fmt = Get-SameFormatCodec $f
+        $output = Join-Path $outDir "${base}_$Mode$($fmt.ext)"
         $output = Get-NonCollidingPath $output $used
-        $codec = switch ($f.Extension.ToLower()) {
-            '.flac' { @('-c:a','flac') }
-            '.wav' { @('-c:a','pcm_s16le') }
-            '.mp3' { @('-c:a','libmp3lame','-b:a','320k') }
-            default { @('-c:a','aac','-b:a','256k') }
-        }
-        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-ac', $ch) + $codec + @($output)
+        $ffArgs = @('-hide_banner','-y','-i', $f.FullName, '-vn', '-ac', $ch) + $fmt.args + @($output)
         Write-Host "  $($f.Name)" -ForegroundColor DarkGray
         $exit = Invoke-AudioFF -Ffmpeg $ffmpeg -FFArgs $ffArgs
         if ($exit -eq 0) { Write-Host "        OK" -ForegroundColor Green }
