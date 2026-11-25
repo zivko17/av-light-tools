@@ -6,8 +6,9 @@
 #    Desc  short description (keep it under ~30 characters)
 #    Ask   what to ask before running it. "[...]" = optional (Enter skips it).
 #          No Ask = runs straight away.
-#  Commands that are not loaded on this PC are hidden, so the menu never
-#  offers something that does not work.
+#  'tools' shows the sections; pick one to see its tools. Commands that are
+#  not loaded on this PC are hidden, so the menu never offers something that
+#  does not work.
 # ===================================================================
 
 function Show-Tools {
@@ -67,6 +68,7 @@ function Show-Tools {
     # Rounded box characters, built from code points so this file stays ASCII
     $TL = [char]0x256D; $TR = [char]0x256E; $BL = [char]0x2570; $BR = [char]0x256F
     $HZ = [char]0x2500; $VT = [char]0x2502; $DOT = [char]0x00B7
+    $boxW = 64
 
     # Header info, read once
     $iface = if (Get-Command Resolve-NetIface -ErrorAction SilentlyContinue) { Resolve-NetIface } else { $null }
@@ -77,24 +79,21 @@ function Show-Tools {
     $netLine = if ($ip) { "$ip  $DOT  $iface" } else { 'no network' }
     $psLine  = "PowerShell $($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor)"
 
-    while ($true) {
+    # Only what is loaded on this PC; empty sections disappear
+    $visible = @(foreach ($sec in $sections) {
+        $items = @($sec.Items | Where-Object { Get-Command $_.Name -ErrorAction SilentlyContinue })
+        if ($items) { @{ Title = $sec.Title; Color = $sec.Color; Items = $items } }
+    })
+
+    function Write-ToolsBox([string]$Left, [string]$LeftColor, [string]$Right) {
         try { Clear-Host } catch { }
-
-        $width = 100
-        try { $width = $Host.UI.RawUI.WindowSize.Width } catch { }
-        $twoCols = $width -ge 108
-        $cellW   = 50                                   # one menu cell: number + name + description
-        $boxW    = if ($twoCols) { 2 * $cellW + 2 } else { $cellW }
-
-        # ---- header ---------------------------------------------------
-        $left  = '  AV LIGHT TOOLS'
-        $right = "$env:COMPUTERNAME  "
-        $gap = $boxW - $left.Length - $right.Length; if ($gap -lt 1) { $gap = 1 }
+        $l = "  $Left"; $r = "$Right  "
+        $gap = $boxW - $l.Length - $r.Length; if ($gap -lt 1) { $gap = 1 }
         Write-Host ""
         Write-Host ("  $TL" + ("$HZ" * $boxW) + $TR) -ForegroundColor DarkGray
         Write-Host "  $VT" -NoNewline -ForegroundColor DarkGray
-        Write-Host $left -NoNewline -ForegroundColor White
-        Write-Host ((' ' * $gap) + $right) -NoNewline -ForegroundColor DarkGray
+        Write-Host $l -NoNewline -ForegroundColor $LeftColor
+        Write-Host ((' ' * $gap) + $r) -NoNewline -ForegroundColor DarkGray
         Write-Host $VT -ForegroundColor DarkGray
         $sub = "  $netLine   $DOT   $psLine"
         if ($sub.Length -gt $boxW) { $sub = $sub.Substring(0, $boxW) }
@@ -102,63 +101,28 @@ function Show-Tools {
         Write-Host $sub.PadRight($boxW) -NoNewline -ForegroundColor $(if ($ip) { 'Cyan' } else { 'Yellow' })
         Write-Host $VT -ForegroundColor DarkGray
         Write-Host ("  $BL" + ("$HZ" * $boxW) + $BR) -ForegroundColor DarkGray
+        Write-Host ""
+    }
 
-        # ---- sections -------------------------------------------------
-        $map = @{}
-        $n = 1
-        foreach ($sec in $sections) {
-            $items = @($sec.Items | Where-Object { Get-Command $_.Name -ErrorAction SilentlyContinue })
-            if (-not $items) { continue }
-
-            Write-Host ""
-            Write-Host ("  " + $sec.Title + ' ') -NoNewline -ForegroundColor $sec.Color
-            Write-Host ("$HZ" * ($boxW - $sec.Title.Length)) -ForegroundColor DarkGray
-
-            $perRow = if ($twoCols) { 2 } else { 1 }
-            for ($r = 0; $r -lt $items.Count; $r += $perRow) {
-                for ($c = 0; $c -lt $perRow -and ($r + $c) -lt $items.Count; $c++) {
-                    $it = $items[$r + $c]
-                    $map[$n] = $it
-                    $desc = $it.Desc
-                    if ($desc.Length -gt ($cellW - 24)) { $desc = $desc.Substring(0, $cellW - 25) + '.' }
-                    Write-Host ("  {0,3}  " -f $n) -NoNewline -ForegroundColor $sec.Color
-                    Write-Host ("{0,-17}" -f $it.Name) -NoNewline -ForegroundColor White
-                    Write-Host ("{0,-$($cellW - 24)}" -f $desc) -NoNewline -ForegroundColor DarkGray
-                    $n++
-                }
-                Write-Host ""
-            }
-        }
-
+    function Read-ToolsChoice([string]$Hint) {
         Write-Host ""
         Write-Host ("  " + ("$HZ" * $boxW)) -ForegroundColor DarkGray
-        Write-Host "  Number + Enter to run   $DOT   Enter alone to exit   $DOT   or type any command" -ForegroundColor DarkGray
+        Write-Host "  $Hint" -ForegroundColor DarkGray
         Write-Host ""
-
         if (-not [Console]::IsInputRedirected) { try { $Host.UI.RawUI.FlushInputBuffer() } catch { } }
-        $choice = Read-Host "  >"
-        if ([string]::IsNullOrWhiteSpace($choice)) { break }
+        return (Read-Host "  >")
+    }
 
-        $num = 0
-        if (-not ([int]::TryParse($choice.Trim(), [ref]$num) -and $map.ContainsKey($num))) {
-            Write-Host "  '$choice' is not on the list" -ForegroundColor Red
-            Start-Sleep -Milliseconds 900
-            continue
-        }
-
-        $it = $map[$num]
+    function Invoke-ToolsEntry($it) {
         $argline = ''
         if ($it.Ask) {
-            $optional = $it.Ask.StartsWith('[')
             $argline = Read-Host ("  {0}  {1}" -f $it.Name, $it.Ask)
-            if (-not $optional -and [string]::IsNullOrWhiteSpace($argline)) { continue }
+            if (-not $it.Ask.StartsWith('[') -and [string]::IsNullOrWhiteSpace($argline)) { return }
         }
-
         Write-Host ""
         try {
-            if ([string]::IsNullOrWhiteSpace($argline)) {
-                & $it.Name
-            } else {
+            if ([string]::IsNullOrWhiteSpace($argline)) { & $it.Name }
+            else {
                 # Split on spaces but keep "quoted paths" together
                 $argArr = @([regex]::Matches($argline, '"([^"]*)"|(\S+)') | ForEach-Object {
                     if ($_.Groups[1].Success) { $_.Groups[1].Value } else { $_.Value }
@@ -169,7 +133,51 @@ function Show-Tools {
             Write-Host ("  Error in '{0}': {1}" -f $it.Name, $_.Exception.Message) -ForegroundColor Red
         }
         Write-Host ""
-        Read-Host "  Enter to go back to the menu" | Out-Null
+        Read-Host "  Enter to go back" | Out-Null
+    }
+
+    # ---- main menu: sections only ---------------------------------------
+    while ($true) {
+        Write-ToolsBox 'AV LIGHT TOOLS' 'White' $env:COMPUTERNAME
+        for ($i = 0; $i -lt $visible.Count; $i++) {
+            $sec = $visible[$i]
+            $names = ($sec.Items | ForEach-Object { $_.Name }) -join ', '
+            $max = $boxW - 22
+            if ($names.Length -gt $max) { $names = $names.Substring(0, $max - 3) + '...' }
+            Write-Host ("  {0,3}  " -f ($i + 1)) -NoNewline -ForegroundColor $sec.Color
+            Write-Host ("{0,-12}" -f $sec.Title) -NoNewline -ForegroundColor $sec.Color
+            Write-Host $names -ForegroundColor DarkGray
+        }
+
+        $choice = Read-ToolsChoice "Number + Enter to open   $DOT   Enter alone to exit"
+        if ([string]::IsNullOrWhiteSpace($choice)) { break }
+        $num = 0
+        if (-not ([int]::TryParse($choice.Trim(), [ref]$num) -and $num -ge 1 -and $num -le $visible.Count)) {
+            Write-Host "  '$choice' is not on the list" -ForegroundColor Red
+            Start-Sleep -Milliseconds 900
+            continue
+        }
+        $sec = $visible[$num - 1]
+
+        # ---- submenu: the tools of one section --------------------------
+        while ($true) {
+            Write-ToolsBox $sec.Title $sec.Color 'AV LIGHT TOOLS'
+            for ($j = 0; $j -lt $sec.Items.Count; $j++) {
+                $it = $sec.Items[$j]
+                Write-Host ("  {0,3}  " -f ($j + 1)) -NoNewline -ForegroundColor $sec.Color
+                Write-Host ("{0,-18}" -f $it.Name) -NoNewline -ForegroundColor White
+                Write-Host $it.Desc -ForegroundColor DarkGray
+            }
+            $pick = Read-ToolsChoice "Number + Enter to run   $DOT   Enter alone to go back"
+            if ([string]::IsNullOrWhiteSpace($pick)) { break }
+            $k = 0
+            if (-not ([int]::TryParse($pick.Trim(), [ref]$k) -and $k -ge 1 -and $k -le $sec.Items.Count)) {
+                Write-Host "  '$pick' is not on the list" -ForegroundColor Red
+                Start-Sleep -Milliseconds 900
+                continue
+            }
+            Invoke-ToolsEntry $sec.Items[$k - 1]
+        }
     }
 }
 
